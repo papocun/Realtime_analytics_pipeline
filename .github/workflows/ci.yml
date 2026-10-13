@@ -1,0 +1,128 @@
+name: CI — Spotify Data Platform
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Python: Producer unit tests (no credentials required)
+  # ---------------------------------------------------------------------------
+  producer-tests:
+    name: Producer Unit Tests (Python)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install project dependencies
+        run: uv sync
+
+      - name: Run producer tests (offline, no Kafka/Snowflake)
+        run: uv run --with pytest pytest tests/test_producer.py -v --tb=short
+
+  # ---------------------------------------------------------------------------
+  # Python: Offline manifest / DAG configuration tests
+  # ---------------------------------------------------------------------------
+  dag-config-tests:
+    name: DAG Configuration Tests (Python)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install project dependencies
+        run: uv sync
+
+      - name: Run offline DAG configuration test
+        run: |
+          uv run --with pytest pytest tests/test_bronze_manifest.py::test_airflow_dag_configuration -v --tb=short
+          uv run --with pytest pytest tests/test_bronze_manifest.py::test_error_sanitization -v --tb=short
+
+  # ---------------------------------------------------------------------------
+  # dbt: Parse and compile (no warehouse connection)
+  # ---------------------------------------------------------------------------
+  dbt-parse:
+    name: dbt Parse & Compile
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install project dependencies
+        run: uv sync
+
+      - name: dbt parse (validates YAML syntax and model references)
+        run: uv run dbt parse --project-dir spotify_dbt
+        env:
+          # Provide dummy env so dbt profile doesn't fail on load
+          SNOWFLAKE_ACCOUNT: "dummy.account"
+          SNOWFLAKE_USER: "dummy_user"
+          SNOWFLAKE_PRIVATE_KEY_PATH: "/dev/null"
+          SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
+          SNOWFLAKE_DATABASE: "SPOTIFY_DB"
+          SNOWFLAKE_SCHEMA: "GOLD"
+
+  # ---------------------------------------------------------------------------
+  # Dashboard: ESLint and Next.js build check
+  # ---------------------------------------------------------------------------
+  dashboard-build:
+    name: Dashboard Lint & Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install dashboard dependencies
+        working-directory: dashboard
+        run: npm ci
+
+      - name: Lint (ESLint)
+        working-directory: dashboard
+        run: npm run lint
+
+      - name: Next.js build
+        working-directory: dashboard
+        run: npm run build
+        env:
+          # Provide dummy Snowflake env so Next.js build doesn't fail on
+          # missing env vars. Build-time static analysis only.
+          SNOWFLAKE_ACCOUNT: "dummy.account"
+          SNOWFLAKE_USER: "dummy_user"
+          SNOWFLAKE_PRIVATE_KEY_PATH: "/dev/null"
+          SNOWFLAKE_WAREHOUSE: "COMPUTE_WH"
+          SNOWFLAKE_DATABASE: "SPOTIFY_DB"
+          SNOWFLAKE_SCHEMA: "GOLD"

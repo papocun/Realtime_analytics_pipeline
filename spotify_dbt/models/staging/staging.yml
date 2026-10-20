@@ -1,0 +1,86 @@
+version: 2
+
+models:
+  - name: stg_spotify_events
+    description: "Standardized staging view of raw Bronze Spotify events with granular data quality flags, payload conflict detection, and failure reason arrays."
+    columns:
+      - name: event_id
+        description: "Source event UUIDv4."
+      - name: user_id
+        description: "Identifier of user triggering the event."
+      - name: song_id
+        description: "Deterministic UUIDv5 of the track."
+      - name: artist_name
+        description: "Name of the artist."
+      - name: song_name
+        description: "Title of the song."
+      - name: event_type
+        description: "Normalized event action type."
+      - name: device_type
+        description: "Normalized device platform."
+      - name: country
+        description: "Normalized two-letter ISO country code."
+      - name: event_timestamp
+        description: "Parsed UTC timestamp of event generation (NULL if invalid)."
+      - name: raw_event_timestamp
+        description: "Original unparsed timestamp string from Bronze."
+      - name: is_valid_event_id
+        description: "Boolean indicating event_id is non-null and non-empty."
+        data_tests:
+          - not_null
+      - name: is_valid_timestamp
+        description: "Boolean indicating event_timestamp parsed successfully."
+        data_tests:
+          - not_null
+      - name: is_valid_event_type
+        description: "Boolean indicating event_type matches supported contract."
+        data_tests:
+          - not_null
+      - name: is_valid_device_type
+        description: "Boolean indicating device_type matches supported contract."
+        data_tests:
+          - not_null
+      - name: is_valid_country
+        description: "Boolean indicating country matches supported ISO code set."
+        data_tests:
+          - not_null
+      - name: is_valid_attributes
+        description: "Boolean indicating core business attributes are present."
+        data_tests:
+          - not_null
+      - name: raw_occurrence_count
+        description: "Number of rows in Bronze sharing this event_id."
+        data_tests:
+          - not_null
+      - name: distinct_payload_count
+        description: "Number of distinct payload hashes sharing this event_id."
+        data_tests:
+          - not_null
+      - name: is_duplicate_id
+        description: "Boolean indicating event_id appears more than once."
+        data_tests:
+          - not_null
+      - name: is_conflicting_id
+        description: "Boolean indicating event_id has conflicting payload values."
+        data_tests:
+          - not_null
+      - name: quality_issues
+        description: "Array of applicable failure reason codes."
+        data_tests:
+          - not_null
+      - name: failure_reasons
+        description: "Comma-separated string of applicable failure reason codes."
+        data_tests:
+          - not_null
+      - name: issue_count
+        description: "Count of data quality failure reasons detected on this row."
+        data_tests:
+          - not_null
+      - name: is_valid_record
+        description: "Master flag: TRUE only when issue_count == 0 (zero quality defects)."
+        data_tests:
+          - not_null
+      - name: staged_at
+        description: "UTC timestamp when the record was processed through staging."
+        data_tests:
+          - not_null

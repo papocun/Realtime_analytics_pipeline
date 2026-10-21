@@ -1,0 +1,102 @@
+version: 2
+
+models:
+  - name: silver_spotify_events
+    description: "Cleaned, standardized, and deduplicated Silver layer Spotify user event table."
+    columns:
+      - name: event_id
+        description: "Primary key: unique event identifier (UUIDv4)."
+        data_tests:
+          - not_null
+          - unique
+      - name: user_id
+        description: "Identifier of the user."
+        data_tests:
+          - not_null
+      - name: song_id
+        description: "Deterministic track identifier."
+        data_tests:
+          - not_null
+      - name: artist_name
+        description: "Artist name."
+        data_tests:
+          - not_null
+      - name: song_name
+        description: "Song title."
+        data_tests:
+          - not_null
+      - name: event_type
+        description: "Standardized action type."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['play', 'pause', 'skip', 'add_to_playlist']
+      - name: device_type
+        description: "Standardized device platform."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['mobile', 'desktop', 'web']
+      - name: country
+        description: "Standardized ISO two-letter country code."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['US', 'UK', 'CA', 'AU', 'IN', 'DE']
+      - name: event_timestamp
+        description: "Standardized UTC timestamp of the user interaction."
+        data_tests:
+          - not_null
+      - name: raw_occurrence_count
+        description: "Count of raw occurrences of this event_id in Bronze."
+        data_tests:
+          - not_null
+      - name: silver_inserted_at
+        description: "Audit timestamp recording when this row was materialized into Silver."
+        data_tests:
+          - not_null
+
+  - name: quarantine_spotify_events
+    description: "Quarantine view containing invalid, malformed, or conflicting events excluded from clean Silver."
+    columns:
+      - name: failure_reasons
+        description: "Comma-separated string of applicable failure reason codes."
+      - name: issue_count
+        description: "Count of distinct failure reasons on this quarantined row."
+
+  - name: silver_data_quality_metrics
+    description: "Operational monitoring view tracking row counts, validity rates, and error distributions."
+    columns:
+      - name: total_staged_records
+        description: "Total count of records processed through Staging."
+        data_tests:
+          - not_null
+      - name: valid_record_count
+        description: "Count of records passing all validation checks."
+        data_tests:
+          - not_null
+      - name: quarantined_record_count
+        description: "Count of records failing one or more validation checks."
+        data_tests:
+          - not_null
+      - name: silver_canonical_records
+        description: "Count of canonical records materialized into Silver."
+        data_tests:
+          - not_null
+      - name: data_quality_pass_rate_pct
+        description: "Percentage of total records meeting the full data quality contract."
+        data_tests:
+          - not_null
+
+  - name: silver_quarantine_summary
+    description: "Monitoring view aggregating quarantine volumes by granular failure reason code."
+    columns:
+      - name: failure_reason
+        description: "Standardized failure category code."
+      - name: affected_record_count
+        description: "Number of quarantined records with this failure code."
+      - name: distinct_event_count
+        description: "Number of distinct event IDs impacted by this failure code."

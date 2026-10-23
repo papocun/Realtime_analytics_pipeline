@@ -1,0 +1,249 @@
+version: 2
+
+models:
+  - name: dim_songs
+    description: "Dimension table containing unique song tracks and their canonical metadata."
+    columns:
+      - name: song_id
+        description: "Primary key: unique song track identifier."
+        data_tests:
+          - not_null
+          - unique
+      - name: song_name
+        description: "Resolved canonical song title."
+        data_tests:
+          - not_null
+      - name: artist_name
+        description: "Resolved canonical artist name."
+        data_tests:
+          - not_null
+      - name: total_events
+        description: "Cumulative count of events associated with this track."
+        data_tests:
+          - not_null
+      - name: total_plays
+        description: "Cumulative count of play events for this track."
+        data_tests:
+          - not_null
+      - name: gold_created_at
+        description: "Audit timestamp recording model materialization."
+        data_tests:
+          - not_null
+
+  - name: dim_users
+    description: "Dimension table containing unique active users. Does not include transient event-level attributes."
+    columns:
+      - name: user_id
+        description: "Primary key: unique user identifier."
+        data_tests:
+          - not_null
+          - unique
+      - name: first_active_at
+        description: "First observed event timestamp for this user."
+        data_tests:
+          - not_null
+      - name: last_active_at
+        description: "Most recent event timestamp for this user."
+        data_tests:
+          - not_null
+      - name: total_events
+        description: "Lifetime event interactions."
+        data_tests:
+          - not_null
+      - name: play_events
+        description: "Lifetime play interactions."
+        data_tests:
+          - not_null
+      - name: distinct_songs_played
+        description: "Count of distinct tracks played by this user."
+        data_tests:
+          - not_null
+      - name: gold_created_at
+        description: "Audit timestamp."
+        data_tests:
+          - not_null
+
+  - name: dim_date
+    description: "Calendar date dimension table providing calendar attributes and date hierarchy."
+    columns:
+      - name: date_day
+        description: "Primary key: calendar date."
+        data_tests:
+          - not_null
+          - unique
+      - name: year
+        description: "Calendar year (e.g. 2026)."
+        data_tests:
+          - not_null
+      - name: month
+        description: "Calendar month (1-12)."
+        data_tests:
+          - not_null
+      - name: day_of_month
+        description: "Day of month (1-31)."
+        data_tests:
+          - not_null
+      - name: is_weekend
+        description: "Boolean indicating Saturday or Sunday."
+        data_tests:
+          - not_null
+
+  - name: fct_listening_events
+    description: "Canonical fact table of atomic user listening events at 1:1 grain with Silver clean events."
+    columns:
+      - name: event_id
+        description: "Primary key: unique event identifier (UUIDv4)."
+        data_tests:
+          - not_null
+          - unique
+      - name: event_timestamp
+        description: "Timestamp when the event occurred in UTC."
+        data_tests:
+          - not_null
+      - name: event_date
+        description: "Foreign key: Calendar date of the event referencing dim_date."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_day
+      - name: user_id
+        description: "Foreign key: User identifier referencing dim_users."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_users')
+                field: user_id
+      - name: song_id
+        description: "Foreign key: Song track identifier referencing dim_songs."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_songs')
+                field: song_id
+      - name: event_type
+        description: "Action type of the event."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['play', 'pause', 'skip', 'add_to_playlist']
+      - name: device_type
+        description: "Device category on which the event took place."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['mobile', 'desktop', 'web']
+      - name: country
+        description: "Two-letter ISO country code at time of event."
+        data_tests:
+          - not_null
+      - name: is_play
+        description: "Boolean flag true if event_type is play."
+        data_tests:
+          - not_null
+      - name: is_skip
+        description: "Boolean flag true if event_type is skip."
+        data_tests:
+          - not_null
+
+  - name: agg_daily_activity
+    description: "Daily aggregate activity metric table."
+    columns:
+      - name: event_date
+        description: "Primary key: date of activity."
+        data_tests:
+          - not_null
+          - unique
+      - name: total_events
+        description: "Total events logged on this date."
+        data_tests:
+          - not_null
+      - name: play_events
+        description: "Total play events logged on this date."
+        data_tests:
+          - not_null
+      - name: skip_events
+        description: "Total skip events logged on this date."
+        data_tests:
+          - not_null
+      - name: distinct_listeners
+        description: "Count of distinct active users with >= 1 play event."
+        data_tests:
+          - not_null
+
+  - name: agg_song_rankings
+    description: "Track-level play performance and ranking table."
+    columns:
+      - name: song_id
+        description: "Primary key: unique track identifier."
+        data_tests:
+          - not_null
+          - unique
+      - name: play_rank
+        description: "Rank by play count (dense_rank)."
+        data_tests:
+          - not_null
+      - name: play_events
+        description: "Total play events for this song."
+        data_tests:
+          - not_null
+      - name: distinct_listeners
+        description: "Distinct users who played this song."
+        data_tests:
+          - not_null
+
+  - name: agg_artist_rankings
+    description: "Artist-level play performance and ranking table."
+    columns:
+      - name: artist_name
+        description: "Primary key: artist name."
+        data_tests:
+          - not_null
+          - unique
+      - name: artist_rank
+        description: "Rank by play count (dense_rank)."
+        data_tests:
+          - not_null
+      - name: play_events
+        description: "Total play events across all songs by this artist."
+        data_tests:
+          - not_null
+
+  - name: agg_country_activity
+    description: "Geographic distribution of event activity."
+    columns:
+      - name: country
+        description: "Primary key: country code."
+        data_tests:
+          - not_null
+          - unique
+      - name: total_events
+        description: "Total event interactions originating in this country."
+        data_tests:
+          - not_null
+      - name: play_events
+        description: "Total plays originating in this country."
+        data_tests:
+          - not_null
+
+  - name: agg_device_distribution
+    description: "Device category breakdown of interactions."
+    columns:
+      - name: device_type
+        description: "Primary key: device category."
+        data_tests:
+          - not_null
+          - unique
+      - name: total_events
+        description: "Total events originating from this device type."
+        data_tests:
+          - not_null
+      - name: device_share_pct
+        description: "Percentage share of total events."
+        data_tests:
+          - not_null

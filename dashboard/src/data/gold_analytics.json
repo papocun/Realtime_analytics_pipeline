@@ -1,0 +1,272 @@
+{
+  "summary": {
+    "total_events": 720.0,
+    "play_events": 188.0,
+    "skip_events": 171.0,
+    "pause_events": 189.0,
+    "add_to_playlist_events": 172.0,
+    "distinct_listeners": 55.0,
+    "total_active_users": 69.0,
+    "distinct_songs_played": 12.0,
+    "overall_skip_rate_pct": 47.63
+  },
+  "daily_activity": [
+    {
+      "event_date": "2026-10-20",
+      "total_events": 610,
+      "play_events": 147,
+      "skip_events": 145,
+      "pause_events": 157,
+      "add_to_playlist_events": 161,
+      "distinct_listeners": 38,
+      "distinct_songs_played": 6,
+      "skip_rate_pct": 49.66,
+      "gold_created_at": "2026-10-25 08:41:40.690000-07:00"
+    }
+  ],
+  "hourly_activity": [
+    {
+      "event_hour": 14,
+      "total_events": 10,
+      "play_events": 2,
+      "skip_events": 5,
+      "pause_events": 2,
+      "add_to_playlist_events": 1
+    },
+    {
+      "event_hour": 15,
+      "total_events": 607,
+      "play_events": 146,
+      "skip_events": 144,
+      "pause_events": 157,
+      "add_to_playlist_events": 160
+    },
+    {
+      "event_hour": 18,
+      "total_events": 103,
+      "play_events": 40,
+      "skip_events": 22,
+      "pause_events": 30,
+      "add_to_playlist_events": 11
+    }
+  ],
+  "song_rankings": [
+    {
+      "song_id": "e0cc7f42-5deb-5253-ac46-3be4e0caa845",
+      "song_name": "Love Story",
+      "artist_name": "Taylor Swift",
+      "play_rank": 1,
+      "play_events": 29,
+      "total_skips": 20,
+      "distinct_listeners": 19,
+      "total_events": 100,
+      "skip_rate_pct": 40.82,
+      "gold_created_at": "2026-10-25 08:41:41.319000-07:00"
+    },
+    {
+      "song_id": "3344ea54-f8dd-5755-a71d-2083035fb139",
+      "song_name": "Shape of You",
+      "artist_name": "Ed Sheeran",
+      "play_rank": 2,
+      "play_events": 28,
+      "total_skips": 24,
+      "distinct_listeners": 17,
+      "total_events": 94,
+      "skip_rate_pct": 46.15,
+      "gold_created_at": "2026-10-25 08:41:41.319000-07:00"
+    },
+    {
+      "song_id": "28b10c21-4d69-50f8-80f6-533bb893fe01",
+      "song_name": "Levitating",
+      "artist_name": "Dua Lipa",
+      "play_rank": 3,
+      "play_events": 25,
+      "total_skips": 26,
+      "distinct_listeners": 19,
+      "total_events": 112,
+      "skip_rate_pct": 50.98,
+      "gold_created_at": "2026-10-25 08:41:41.319000-07:00"
+    },
+    {
+      "song_id": "09a7d5c8-d131-55b1-9758-8cfdc6375651",
+      "song_name": "God's Plan",
+      "artist_name": "Drake",
+      "play_rank": 4,
+      "play_events": 23,
+      "total_skips": 25,
+      "distinct_listeners": 16,
+      "total_events": 98,
+      "skip_rate_pct": 52.08,
+      "gold_created_at": "2026-10-25 08:41:41.319000-07:00"
+    },
+    {
+      "song_id": "1bf43cf2-745e-57bb-8af1-5a7055a1f93a",
+      "song_name": "Stronger",
+      "artist_name": "Kanye West",
+      "play_rank": 5,
+      "play_events": 22,
+      "total_skips": 26,
+      "distinct_listeners": 14,
+      "total_events": 100,
+      "skip_rate_pct": 54.17,
+      "gold_created_at": "2026-10-25 08:41:41.319000-07:00"
+    },
+    {
+      "song_id": "74a42680-ff06-55cf-9f7b-426cd71bda2b",
+      "song_name": "Blinding Lights",
+      "artist_name": "The Weeknd",
+      "play_rank": 6,
+      "play_events": 20,
+      "total_skips": 24,
+      "distinct_listeners": 13,
+      "total_events": 106,
+      "skip_rate_pct": 54.55,
+      "gold_created_at": "2026-10-25 08:41:41.319000-07:00"
+    }
+  ],
+  "artist_rankings": [
+    {
+      "artist_name": "Taylor Swift",
+      "artist_rank": 1,
+      "play_events": 29,
+      "skip_events": 20,
+      "distinct_songs": 1,
+      "distinct_listeners": 19,
+      "total_events": 100,
+      "skip_rate_pct": 40.82,
+      "gold_created_at": "2026-10-25 08:41:40.941000-07:00"
+    },
+    {
+      "artist_name": "Ed Sheeran",
+      "artist_rank": 2,
+      "play_events": 28,
+      "skip_events": 24,
+      "distinct_songs": 1,
+      "distinct_listeners": 17,
+      "total_events": 94,
+      "skip_rate_pct": 46.15,
+      "gold_created_at": "2026-10-25 08:41:40.941000-07:00"
+    },
+    {
+      "artist_name": "Dua Lipa",
+      "artist_rank": 3,
+      "play_events": 25,
+      "skip_events": 26,
+      "distinct_songs": 1,
+      "distinct_listeners": 19,
+      "total_events": 112,
+      "skip_rate_pct": 50.98,
+      "gold_created_at": "2026-10-25 08:41:40.941000-07:00"
+    },
+    {
+      "artist_name": "Drake",
+      "artist_rank": 4,
+      "play_events": 23,
+      "skip_events": 25,
+      "distinct_songs": 1,
+      "distinct_listeners": 16,
+      "total_events": 98,
+      "skip_rate_pct": 52.08,
+      "gold_created_at": "2026-10-25 08:41:40.941000-07:00"
+    },
+    {
+      "artist_name": "Kanye West",
+      "artist_rank": 5,
+      "play_events": 22,
+      "skip_events": 26,
+      "distinct_songs": 1,
+      "distinct_listeners": 14,
+      "total_events": 100,
+      "skip_rate_pct": 54.17,
+      "gold_created_at": "2026-10-25 08:41:40.941000-07:00"
+    },
+    {
+      "artist_name": "The Weeknd",
+      "artist_rank": 6,
+      "play_events": 20,
+      "skip_events": 24,
+      "distinct_songs": 1,
+      "distinct_listeners": 13,
+      "total_events": 106,
+      "skip_rate_pct": 54.55,
+      "gold_created_at": "2026-10-25 08:41:40.941000-07:00"
+    }
+  ],
+  "country_activity": [
+    {
+      "country": "AU",
+      "total_events": 142,
+      "distinct_listeners": 54,
+      "event_share_pct": 19.72
+    },
+    {
+      "country": "US",
+      "total_events": 123,
+      "distinct_listeners": 50,
+      "event_share_pct": 17.08
+    },
+    {
+      "country": "IN",
+      "total_events": 120,
+      "distinct_listeners": 50,
+      "event_share_pct": 16.67
+    },
+    {
+      "country": "CA",
+      "total_events": 120,
+      "distinct_listeners": 41,
+      "event_share_pct": 16.67
+    },
+    {
+      "country": "UK",
+      "total_events": 111,
+      "distinct_listeners": 49,
+      "event_share_pct": 15.42
+    },
+    {
+      "country": "DE",
+      "total_events": 104,
+      "distinct_listeners": 44,
+      "event_share_pct": 14.44
+    }
+  ],
+  "device_distribution": [
+    {
+      "device_type": "desktop",
+      "total_events": 270,
+      "play_events": 68,
+      "skip_events": 64,
+      "device_share_pct": 37.5
+    },
+    {
+      "device_type": "mobile",
+      "total_events": 247,
+      "play_events": 66,
+      "skip_events": 58,
+      "device_share_pct": 34.31
+    },
+    {
+      "device_type": "web",
+      "total_events": 203,
+      "play_events": 54,
+      "skip_events": 49,
+      "device_share_pct": 28.19
+    }
+  ],
+  "data_quality": {
+    "bronze_raw_rows": 7320,
+    "bronze_distinct_events": 720,
+    "manifest_successful_files": 61,
+    "silver_canonical_rows": 720,
+    "silver_quarantined_rows": 0,
+    "gold_fact_rows": 720,
+    "deduplicated_rows": 6710,
+    "data_pass_rate_pct": 100.0,
+    "dbt_tests_total": 117,
+    "dbt_tests_passed": 117,
+    "pytest_total": 10,
+    "pytest_passed": 10,
+    "models_count": 14,
+    "last_sync_timestamp": "2026-10-25T22:15:29Z"
+  }
+}

@@ -5,17 +5,19 @@
     )
 }}
 
-/*
-    Dimension: dim_date
-    Grain: Exactly one row per calendar date.
-    Range: Generates a complete calendar spine for the operational reporting period (October 2026).
-    Timezone semantics: UTC calendar dates aligning with event_timestamp dates.
-*/
+-- Grain: one row per UTC calendar day, spanning the first to the last event date.
 
-with date_spine as (
+with bounds as (
     select
-        dateadd(day, seq4(), '2026-10-01'::date) as date_day
-    from table(generator(rowcount => 31))
+        min(cast(event_timestamp as date)) as start_date,
+        max(cast(event_timestamp as date)) as end_date
+    from {{ ref('silver_spotify_events') }}
+),
+
+date_spine as (
+    select dateadd(day, row_number() over (order by seq4()) - 1, bounds.start_date) as date_day
+    from bounds, table(generator(rowcount => 3660))
+    qualify date_day <= bounds.end_date
 )
 
 select

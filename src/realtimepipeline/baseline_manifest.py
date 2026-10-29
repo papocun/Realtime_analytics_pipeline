@@ -1,7 +1,4 @@
-"""
-Baseline utility to register existing MinIO files into Snowflake Bronze File Manifest.
-This prevents redundant re-ingestion of files that were already loaded prior to manifest implementation.
-"""
+"""One-off backfill: registers MinIO files loaded before the manifest existed, so the DAG does not ingest them twice."""
 
 import os
 import uuid
@@ -11,7 +8,6 @@ import boto3
 import snowflake.connector
 from dotenv import load_dotenv
 
-# Load configuration
 for env_path in [
     Path("docker/dags/.env"),
     Path(__file__).resolve().parents[2] / "docker" / "dags" / ".env",
@@ -45,7 +41,7 @@ def get_snowflake_conn():
 
 def baseline_existing_files():
     conn = get_snowflake_conn()
-    s3_endpoint = "http://localhost:9002"
+    s3_endpoint = os.getenv("MINIO_HOST_ENDPOINT", "http://localhost:9002")
     bucket = os.getenv("MINIO_BUCKET", "spotify")
     prefix = os.getenv("MINIO_PREFIX", "bronze/date=")
 
@@ -83,7 +79,7 @@ def baseline_existing_files():
                 last_mod,
                 "SUCCESS",
                 "baseline_preexisting",
-                10,
+                None,
                 last_mod or datetime.now(timezone.utc),
                 datetime.now(timezone.utc),
             ))

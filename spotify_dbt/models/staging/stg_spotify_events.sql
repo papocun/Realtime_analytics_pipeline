@@ -5,21 +5,7 @@
     )
 }}
 
-/*
-    Staging View: stg_spotify_events
-    - Reads raw event payloads from Bronze.
-    - Standardizes column casing, trims string attributes, and safely casts timestamps.
-    - Performs comprehensive multi-rule data quality evaluations:
-        1. Identifier validity (is_valid_event_id)
-        2. Timestamp validity (is_valid_timestamp)
-        3. Event type conformance (is_valid_event_type)
-        4. Device type conformance (is_valid_device_type)
-        5. Country ISO-format conformance (is_valid_country)
-        6. Core business attributes presence (is_valid_attributes)
-        7. Windowed payload conflict detection (is_conflicting_id)
-    - Compiles applicable failure reason codes into a non-mutually exclusive array.
-    - Exposes raw strings alongside normalized values for full auditability.
-*/
+-- Normalises Bronze and flags every quality rule per row; nothing is dropped here so Silver and quarantine stay reconcilable.
 
 WITH source_data AS (
     SELECT
@@ -63,37 +49,31 @@ payload_analysis AS (
         event_timestamp,
         raw_event_timestamp,
 
-        -- 1. Identifier Validity
         CASE
             WHEN event_id IS NOT NULL AND LENGTH(event_id) > 0 THEN TRUE
             ELSE FALSE
         END AS is_valid_event_id,
 
-        -- 2. Timestamp Validity
         CASE
             WHEN event_timestamp IS NOT NULL THEN TRUE
             ELSE FALSE
         END AS is_valid_timestamp,
 
-        -- 3. Event Type Validity (Contract: play, pause, skip, add_to_playlist)
         CASE
             WHEN event_type IN ('play', 'pause', 'skip', 'add_to_playlist') THEN TRUE
             ELSE FALSE
         END AS is_valid_event_type,
 
-        -- 4. Device Type Validity (Contract: mobile, desktop, web)
         CASE
             WHEN device_type IN ('mobile', 'desktop', 'web') THEN TRUE
             ELSE FALSE
         END AS is_valid_device_type,
 
-        -- 5. Country Validity (Contract: ISO 3166-1 alpha-2 supported codes)
         CASE
             WHEN country IN ('US', 'UK', 'CA', 'AU', 'IN', 'DE') THEN TRUE
             ELSE FALSE
         END AS is_valid_country,
 
-        -- 6. Core Business Attributes Presence
         CASE
             WHEN user_id IS NOT NULL AND LENGTH(user_id) > 0
              AND song_id IS NOT NULL AND LENGTH(song_id) > 0
@@ -103,7 +83,6 @@ payload_analysis AS (
             ELSE FALSE
         END AS is_valid_attributes,
 
-        -- 7. Windowed Multiplicity and Payload Conflict Checks
         COUNT(*) OVER (
             PARTITION BY event_id
         ) AS raw_occurrence_count,
@@ -142,7 +121,6 @@ evaluated AS (
         CASE WHEN raw_occurrence_count > 1 THEN TRUE ELSE FALSE END AS is_duplicate_id,
         CASE WHEN distinct_payload_count > 1 THEN TRUE ELSE FALSE END AS is_conflicting_id,
 
-        -- Comprehensive Reason Classification (Multiple issues per row preserved)
         ARRAY_CONSTRUCT_COMPACT(
             CASE WHEN is_valid_event_id = FALSE THEN 'MISSING_EVENT_ID' END,
             CASE WHEN is_valid_timestamp = FALSE THEN 'INVALID_TIMESTAMP' END,

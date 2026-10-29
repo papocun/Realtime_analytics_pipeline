@@ -1,17 +1,4 @@
-"""
-Kafka to MinIO Bronze Ingestion Consumer
-=======================================
-Consumes raw Spotify events from Kafka, batches them into JSON Lines files,
-and uploads them to MinIO under the bronze/ prefix partitioned by date and hour.
-
-Reliability guarantees:
-- Manual offset commits (enable_auto_commit=False).
-- Batch offsets are tracked per topic-partition and committed ONLY after
-  s3.put_object() succeeds.
-- Failed uploads are logged, retried safely, and do NOT commit offsets.
-- Graceful shutdown (SIGINT/SIGTERM/Ctrl+C) flushes any pending batch and
-  commits offsets before closing the consumer.
-"""
+"""Kafka -> MinIO Bronze landing: batches events into JSON Lines files and commits offsets only after a successful upload."""
 
 import json
 import logging
@@ -19,6 +6,7 @@ import os
 import signal
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -26,7 +14,6 @@ import boto3
 from dotenv import load_dotenv
 from kafka import KafkaConsumer, OffsetAndMetadata, TopicPartition
 
-# ---------- Configure Logging ----------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -34,7 +21,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("kafka_to_minio")
 
-# ---------- Load Environment Variables ----------
 _env_candidates = [
     os.path.join(os.path.dirname(__file__), ".env"),
     ".env",
@@ -44,7 +30,6 @@ for _env_path in _env_candidates:
         load_dotenv(_env_path)
 load_dotenv()
 
-# ---------- Configuration ----------
 MINIO_BUCKET = os.getenv("MINIO_BUCKET")
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
@@ -56,12 +41,10 @@ BATCH_SIZE = int(os.getenv("BATCH_SIZE", 10))
 
 
 class GracefulShutdown(Exception):
-    """Signal caught for graceful consumer shutdown."""
     pass
 
 
 def ensure_bucket_exists(s3_client, bucket_name: str) -> None:
-    """Ensure the target MinIO bucket exists (idempotent)."""
     try:
         s3_client.head_bucket(Bucket=bucket_name)
         log.info("Bucket %s already exists.", bucket_name)
@@ -71,11 +54,6 @@ def ensure_bucket_exists(s3_client, bucket_name: str) -> None:
 
 
 def build_commit_offsets(batch: List[Any]) -> Dict[TopicPartition, OffsetAndMetadata]:
-    """
-    Computes the offset dictionary {TopicPartition: OffsetAndMetadata} to commit.
-    In Kafka semantics, the committed offset must be last_offset + 1
-    (i.e., the next message the consumer should read upon resume).
-    """
     offsets: Dict[TopicPartition, OffsetAndMetadata] = {}
     for msg in batch:
         if hasattr(msg, "topic") and hasattr(msg, "partition") and hasattr(msg, "offset"):
@@ -94,19 +72,13 @@ def upload_batch(
     max_retries: int = 3,
     retry_delay: float = 1.0,
 ) -> Optional[str]:
-    """
-    Uploads a batch of Kafka messages to MinIO as JSON Lines and commits
-    Kafka offsets only after successful upload.
-
-    If upload fails, logs the error, does not commit offsets, and raises
-    RuntimeError so the batch is not silently discarded.
-    """
     if not batch:
         return None
 
     now = datetime.now(timezone.utc)
     date_path = now.strftime("date=%Y-%m-%d/hour=%H")
-    file_name = f"spotify_events_{now.strftime('%Y-%m-%dT%H-%M-%S')}.json"
+    # Random suffix: two batches flushed in the same second must never overwrite each other's object.
+    file_name = f"spotify_events_{now.strftime('%Y-%m-%dT%H-%M-%S')}_{uuid.uuid4().hex[:8]}.json"
     file_path = f"bronze/{date_path}/{file_name}"
 
     json_data = "\n".join([json.dumps(m.value if hasattr(m, "value") else m) for m in batch])
@@ -140,8 +112,8 @@ def upload_batch(
 
     log.info("✅ Uploaded %d events to MinIO: %s", len(batch), file_path)
 
-    # Track Kafka message offsets for each batch and commit them only after
-    # the corresponding s3.put_object() succeeds.
+    # At-least-once: offsets advance only after the object is durable, so a crash replays the batch
+    # instead of losing it. Any duplicates this creates are removed by event_id in Silver.
     offsets = build_commit_offsets(batch)
     if offsets and consumer:
         consumer.commit(offsets=offsets)
@@ -158,10 +130,6 @@ def consume_events(
     max_retries: int = 3,
     retry_delay: float = 1.0,
 ) -> None:
-    """
-    Main consumption loop. Batches messages, uploads to MinIO, and commits offsets.
-    Handles graceful shutdown on SIGINT/SIGTERM/Ctrl+C to flush pending batches.
-    """
     batch: List[Any] = []
     shutdown_requested = False
 
@@ -229,7 +197,6 @@ def create_kafka_consumer(
     bootstrap_server: Optional[str] = None,
     group_id: Optional[str] = None,
 ) -> KafkaConsumer:
-    """Instantiate KafkaConsumer with manual offset commit."""
     topic_name = topic or os.getenv("KAFKA_TOPIC") or KAFKA_TOPIC
     bootstrap = (
         bootstrap_server
@@ -254,7 +221,6 @@ def create_s3_client(
     aws_access_key_id: Optional[str] = None,
     aws_secret_access_key: Optional[str] = None,
 ):
-    """Instantiate boto3 S3 client for MinIO."""
     endpoint = endpoint_url or os.getenv("MINIO_ENDPOINT") or MINIO_ENDPOINT
     access_key = aws_access_key_id or os.getenv("MINIO_ACCESS_KEY") or MINIO_ACCESS_KEY
     secret_key = aws_secret_access_key or os.getenv("MINIO_SECRET_KEY") or MINIO_SECRET_KEY
@@ -268,6 +234,19 @@ def create_s3_client(
 
 
 def main() -> None:
+    missing = [
+        name for name, value in {
+            "MINIO_BUCKET": MINIO_BUCKET,
+            "MINIO_ENDPOINT": MINIO_ENDPOINT,
+            "KAFKA_TOPIC": KAFKA_TOPIC,
+            "KAFKA_BOOTSTRAP_SERVER": KAFKA_BOOTSTRAP_SERVER,
+            "KAFKA_GROUP_ID": KAFKA_GROUP_ID,
+        }.items() if not value
+    ]
+    if missing:
+        log.error("Missing required configuration: %s", ", ".join(missing))
+        sys.exit(1)
+
     s3 = create_s3_client()
     ensure_bucket_exists(s3, MINIO_BUCKET)
     consumer = create_kafka_consumer()

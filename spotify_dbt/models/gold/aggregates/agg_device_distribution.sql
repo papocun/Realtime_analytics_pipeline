@@ -5,12 +5,6 @@
     )
 }}
 
-/*
-    Aggregate: agg_device_distribution
-    Grain: Exactly one row per device_type.
-    Source: ref('fct_listening_events')
-*/
-
 select
     coalesce(device_type, 'UNKNOWN') as device_type,
     count(*) as total_events,

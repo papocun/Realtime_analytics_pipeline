@@ -5,20 +5,7 @@
     )
 }}
 
-/*
-    Fact Model: fct_listening_events
-    Grain: Exactly one row per valid canonical event (1:1 with silver_spotify_events).
-    Source: ref('silver_spotify_events')
-    
-    Relationships:
-    - user_id references dim_users.user_id
-    - song_id references dim_songs.song_id
-    - event_date references dim_date.date_day
-    
-    Fanout Prevention:
-    Zero outer/dimension joins are used in the core fact extraction, ensuring exactly
-    610 fact records matching 610 verified Silver records.
-*/
+-- Grain: one row per Silver event. No dimension joins, so the fact can never fan out.
 
 select
     event_id,

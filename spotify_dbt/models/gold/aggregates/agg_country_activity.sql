@@ -5,12 +5,6 @@
     )
 }}
 
-/*
-    Aggregate: agg_country_activity
-    Grain: Exactly one row per country.
-    Source: ref('fct_listening_events')
-*/
-
 select
     coalesce(country, 'UNKNOWN') as country,
     count(*) as total_events,

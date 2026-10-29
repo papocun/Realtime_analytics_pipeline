@@ -5,15 +5,6 @@
     )
 }}
 
-/*
-    Aggregate: agg_artist_rankings
-    Grain: Exactly one row per artist_name.
-    Source: ref('fct_listening_events'), ref('dim_songs')
-    
-    Ranking Semantics:
-    Ranked by total play_events descending, distinct_listeners descending, then artist_name ascending.
-*/
-
 with artist_plays as (
     select
         s.artist_name,

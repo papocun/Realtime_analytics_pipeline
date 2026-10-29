@@ -5,16 +5,6 @@
     )
 }}
 
-/*
-    Aggregate: agg_song_rankings
-    Grain: Exactly one row per song_id.
-    Source: ref('fct_listening_events'), ref('dim_songs')
-    
-    Ranking Semantics:
-    Ranked strictly by play_events descending, break ties by distinct_listeners descending, then song_name ascending.
-    Skip Rate Semantics: Skips relative to total play and skip interactions for the song.
-*/
-
 with song_activity as (
     select
         f.song_id,

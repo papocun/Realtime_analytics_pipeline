@@ -5,20 +5,6 @@
     )
 }}
 
-/*
-    Aggregate: agg_daily_activity
-    Grain: Exactly one row per event_date.
-    Source: ref('fct_listening_events')
-    
-    Metric Semantics:
-    - total_events: Count of all valid canonical events on this date.
-    - play_events: Count of events with event_type = 'play'.
-    - skip_events: Count of events with event_type = 'skip'.
-    - distinct_listeners: Count of unique user_id values with at least one play event.
-    - distinct_songs_played: Count of unique song_id values with at least one play event.
-    - skip_rate_pct: Percentage of skips relative to total active engagements (play + skip).
-*/
-
 select
     event_date,
     count(*) as total_events,

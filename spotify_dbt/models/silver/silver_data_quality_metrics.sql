@@ -5,13 +5,6 @@
     )
 }}
 
-/*
-    Monitoring View: silver_data_quality_metrics
-    - Aggregates operational data quality health metrics across Bronze, Staging, and Silver.
-    - Provides immediate visibility into error rates, validity percentages, and anomaly indicators.
-    - Designed for ingestion monitoring dashboards and data SLA alerting.
-*/
-
 WITH staging_metrics AS (
     SELECT
         COUNT(*)                                                    AS total_staged_records,
@@ -21,7 +14,6 @@ WITH staging_metrics AS (
         COUNT_IF(is_duplicate_id = TRUE)                            AS duplicate_instance_count,
         COUNT_IF(is_conflicting_id = TRUE)                          AS conflicting_id_count,
 
-        -- Granular Failure Category Counts
         COUNT_IF(is_valid_event_id = FALSE)                         AS missing_event_id_count,
         COUNT_IF(is_valid_timestamp = FALSE)                        AS invalid_timestamp_count,
         COUNT_IF(is_valid_event_type = FALSE)                       AS invalid_event_type_count,

@@ -2,9 +2,12 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Realtime Music Analytics | Music Streaming Intelligence",
-  description: "Music Streaming Intelligence platform providing listener engagement telemetry, geographic distribution, and streaming activity analytics.",
+  title: "Listening Insights",
+  description: "See when, what and how people listen, from the realtime music streaming pipeline.",
 };
+
+// Apply the saved theme before first paint so the page never flashes the wrong colors.
+const themeScript = `try{var t=localStorage.getItem('theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t;}catch(e){}`;
 
 export default function RootLayout({
   children,
@@ -12,10 +15,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark h-full antialiased">
-      <body className="min-h-full flex flex-col bg-[#0f1115] text-white">
-        {children}
-      </body>
+    <html lang="en" className="h-full antialiased" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
+      <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );
 }

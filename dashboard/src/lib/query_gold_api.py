@@ -1,41 +1,73 @@
+"""Runs the dashboard's single consolidated Gold query and prints the result as JSON for the Next.js API route."""
+
 import os
+import re
 import sys
 import json
 import argparse
 from pathlib import Path
 from decimal import Decimal
 
-# Add project root to sys.path
 project_root = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(project_root))
+
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+
+
+def _identifier(name: str, value: str) -> str:
+    # Database and schema names are interpolated into SQL, so only plain identifiers are accepted.
+    if not _IDENTIFIER.match(value):
+        raise ValueError(f"{name} must be a plain Snowflake identifier, got {value!r}")
+    return value.upper()
+
+
+def _load_env():
+    from dotenv import load_dotenv
+
+    # The dashboard's own settings win; the Airflow DAG file only fills in what is missing.
+    for env_path in (project_root / "dashboard" / ".env", project_root / "docker" / "dags" / ".env"):
+        if env_path.exists():
+            load_dotenv(env_path, override=False)
+
+
+def _resolve_key_path() -> Path:
+    configured = os.getenv("SNOWFLAKE_PRIVATE_KEY_PATH")
+    candidates = [Path(configured)] if configured else []
+    if configured and not Path(configured).is_absolute():
+        candidates.append(project_root / configured)
+    candidates.append(project_root / "secrets" / "rsa_key.p8")
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError("Snowflake private key not found; set SNOWFLAKE_PRIVATE_KEY_PATH")
+
+
+_load_env()
+DATABASE = _identifier("SNOWFLAKE_DATABASE", os.getenv("SNOWFLAKE_DATABASE", "SPOTIFY_DB"))
+GOLD_SCHEMA = _identifier("SNOWFLAKE_GOLD_SCHEMA", os.getenv("SNOWFLAKE_GOLD_SCHEMA", "GOLD"))
+GOLD = f"{DATABASE}.{GOLD_SCHEMA}"
+
 
 def get_snowflake_connection():
     try:
         import snowflake.connector
-        from dotenv import load_dotenv
-        
-        env_path = project_root / 'docker' / 'dags' / '.env'
-        if env_path.exists():
-            load_dotenv(env_path)
-            
-        key_path = project_root / 'secrets' / 'rsa_key.p8'
-        if not key_path.exists():
-            return None, "RSA key file not found at " + str(key_path)
-            
-        conn = snowflake.connector.connect(
-            user=os.getenv('SNOWFLAKE_USER'),
-            account=os.getenv('SNOWFLAKE_ACCOUNT'),
-            private_key_file=str(key_path),
-            warehouse=os.getenv('SNOWFLAKE_WAREHOUSE', 'COMPUTE_WH'),
-            database=os.getenv('SNOWFLAKE_DATABASE', 'SPOTIFY_DB'),
-            schema='GOLD',
-            role=os.getenv('SNOWFLAKE_ROLE', 'ACCOUNTADMIN'),
+
+        connect_args = dict(
+            user=os.getenv("SNOWFLAKE_USER"),
+            account=os.getenv("SNOWFLAKE_ACCOUNT"),
+            private_key_file=str(_resolve_key_path()),
+            warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
+            database=DATABASE,
+            schema=GOLD_SCHEMA,
             login_timeout=15,
-            network_timeout=15
+            network_timeout=15,
         )
-        return conn, None
+        role = os.getenv("SNOWFLAKE_ROLE")
+        if role:
+            connect_args["role"] = role
+        return snowflake.connector.connect(**connect_args), None
     except Exception as e:
         return None, str(e)
+
 
 def json_default(obj):
     if isinstance(obj, Decimal):
@@ -52,7 +84,6 @@ def query_live_gold(event_type=None, device=None, country=None):
     try:
         cur = conn.cursor()
         
-        # Build filter conditions safely
         where_clauses = ["1=1"]
         params = []
         if event_type and event_type != 'ALL':
@@ -67,7 +98,7 @@ def query_live_gold(event_type=None, device=None, country=None):
             
         where_sql = " AND ".join(where_clauses)
         
-        # Single consolidated query for maximum network efficiency
+        # One round trip: every dashboard panel comes from this single statement over the same filtered CTE.
         consolidated_sql = f"""
         WITH base_events AS (
             SELECT 
@@ -80,12 +111,12 @@ def query_live_gold(event_type=None, device=None, country=None):
                 f.EVENT_TYPE, 
                 f.DEVICE_TYPE, 
                 f.COUNTRY
-            FROM SPOTIFY_DB.GOLD.FCT_LISTENING_EVENTS f
-            INNER JOIN SPOTIFY_DB.GOLD.DIM_SONGS s ON f.SONG_ID = s.SONG_ID
+            FROM {GOLD}.FCT_LISTENING_EVENTS f
+            INNER JOIN {GOLD}.DIM_SONGS s ON f.SONG_ID = s.SONG_ID
             WHERE {where_sql}
         ),
         total_scope AS (
-            SELECT COUNT(*) AS total_available FROM SPOTIFY_DB.GOLD.FCT_LISTENING_EVENTS
+            SELECT COUNT(*) AS total_available FROM {GOLD}.FCT_LISTENING_EVENTS
         )
         SELECT
             OBJECT_CONSTRUCT(
@@ -107,12 +138,12 @@ def query_live_gold(event_type=None, device=None, country=None):
              FROM (SELECT DEVICE_TYPE, COUNT(*) AS cnt FROM base_events GROUP BY DEVICE_TYPE ORDER BY cnt DESC)) AS device_dist,
             (SELECT ARRAY_AGG(OBJECT_CONSTRUCT('country', COUNTRY, 'count', cnt, 'users', usr_cnt)) WITHIN GROUP (ORDER BY cnt DESC)
              FROM (SELECT COUNTRY, COUNT(*) AS cnt, COUNT(DISTINCT USER_ID) AS usr_cnt FROM base_events GROUP BY COUNTRY ORDER BY cnt DESC)) AS country_dist,
-            (SELECT COALESCE(TO_VARCHAR(MAX(LAST_ALTERED), 'YYYY-MM-DD HH24:MI:SS UTC'), '2026-10-25 22:15:29 UTC')
-             FROM SPOTIFY_DB.INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='GOLD' AND TABLE_NAME='FCT_LISTENING_EVENTS') AS last_sync_timestamp,
+            (SELECT TO_VARCHAR(MAX(LAST_ALTERED), 'YYYY-MM-DD HH24:MI:SS UTC')
+             FROM {DATABASE}.INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='{GOLD_SCHEMA}' AND TABLE_NAME='FCT_LISTENING_EVENTS') AS last_sync_timestamp,
             (SELECT OBJECT_CONSTRUCT(
-                'actions', (SELECT OBJECT_AGG(EVENT_TYPE, cnt) FROM (SELECT EVENT_TYPE, COUNT(*) as cnt FROM SPOTIFY_DB.GOLD.FCT_LISTENING_EVENTS GROUP BY EVENT_TYPE)),
-                'devices', (SELECT OBJECT_AGG(DEVICE_TYPE, cnt) FROM (SELECT DEVICE_TYPE, COUNT(*) as cnt FROM SPOTIFY_DB.GOLD.FCT_LISTENING_EVENTS GROUP BY DEVICE_TYPE)),
-                'countries', (SELECT OBJECT_AGG(COUNTRY, cnt) FROM (SELECT COUNTRY, COUNT(*) as cnt FROM SPOTIFY_DB.GOLD.FCT_LISTENING_EVENTS GROUP BY COUNTRY))
+                'actions', (SELECT OBJECT_AGG(EVENT_TYPE, cnt) FROM (SELECT EVENT_TYPE, COUNT(*) as cnt FROM {GOLD}.FCT_LISTENING_EVENTS GROUP BY EVENT_TYPE)),
+                'devices', (SELECT OBJECT_AGG(DEVICE_TYPE, cnt) FROM (SELECT DEVICE_TYPE, COUNT(*) as cnt FROM {GOLD}.FCT_LISTENING_EVENTS GROUP BY DEVICE_TYPE)),
+                'countries', (SELECT OBJECT_AGG(COUNTRY, cnt) FROM (SELECT COUNTRY, COUNT(*) as cnt FROM {GOLD}.FCT_LISTENING_EVENTS GROUP BY COUNTRY))
             )) AS dataset_totals;
         """
         
@@ -131,20 +162,19 @@ def query_live_gold(event_type=None, device=None, country=None):
                     return default
             return default
             
-        kpis = parse_col(row[0], {"total_events": 0, "unique_users": 0, "unique_songs": 0, "unique_artists": 0, "total_available_events": 720})
+        kpis = parse_col(row[0], {"total_events": 0, "unique_users": 0, "unique_songs": 0, "unique_artists": 0, "total_available_events": 0})
         timeline = parse_col(row[1], [])
         top_songs = parse_col(row[2], [])
         top_artists = parse_col(row[3], [])
         event_dist = parse_col(row[4], [])
         device_dist = parse_col(row[5], [])
         country_dist = parse_col(row[6], [])
-        last_sync = str(row[7]) if row[7] else "2026-10-25 22:15:29 UTC"
+        last_sync = str(row[7]) if row[7] else None
         dataset_totals = parse_col(row[8], {"actions": {}, "devices": {}, "countries": {}})
         
         cur.close()
         conn.close()
         
-        # Ensure timeline is sorted chronologically
         sorted_timeline = sorted(timeline or [], key=lambda t: t.get('hour', 0))
         
         return {

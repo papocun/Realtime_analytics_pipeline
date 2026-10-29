@@ -1,682 +1,726 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { DashboardData } from '@/lib/data';
-import { GeographicMap } from '@/components/GeographicMap';
-import { VerticalHistogram } from '@/components/VerticalHistogram';
-import { 
-  RotateCcw, 
-  Activity, 
-  Users, 
-  Disc, 
-  Mic2, 
-  Clock, 
-  AlertCircle,
-  Filter,
-  Monitor,
-  Smartphone,
-  Laptop,
-  CheckCircle2,
-  TrendingUp,
-  Info,
-  HelpCircle,
-  Play,
-  Pause,
+import React, { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import {
+  AlertTriangle,
+  Clock3,
+  Disc3,
+  Headphones,
+  Moon,
+  RefreshCw,
+  Repeat2,
   SkipForward,
-  FolderPlus
+  Sun,
+  SunMoon,
+  X,
+  Activity,
+  Database,
+  CircleCheck,
 } from 'lucide-react';
+import { DashboardData } from '@/lib/data';
+import { Card, ChartCard, EmptyState, Segmented } from '@/components/insights/ui';
+import { HourlyChart, Sparkline } from '@/components/insights/HourlyChart';
+import { ActionMix, CountryLollipop, DeviceWaffle } from '@/components/insights/Breakdowns';
+import { RankedBars, RankedItem } from '@/components/insights/RankedBars';
+import {
+  ACTIONS,
+  COUNTRY_NAMES,
+  DEVICES,
+  actionLabel,
+  countryLabel,
+  deviceLabel,
+  fmt,
+  friendlyTimestamp,
+  hourLabel,
+  pct,
+} from '@/components/insights/format';
 
-const COUNTRY_NAMES: Record<string, string> = {
-  AU: 'Australia',
-  US: 'United States',
-  IN: 'India',
-  CA: 'Canada',
-  UK: 'United Kingdom',
-  DE: 'Germany',
-};
+type ActionFilter = 'ALL' | 'play' | 'pause' | 'add_to_playlist' | 'skip';
+type Theme = 'system' | 'light' | 'dark';
 
-export default function RealtimeMusicAnalyticsDashboard() {
-  const [eventType, setEventType] = useState<string>('ALL');
-  const [device, setDevice] = useState<string>('ALL');
-  const [country, setCountry] = useState<string>('ALL');
+export default function ListeningInsightsPage() {
+  const [action, setAction] = useState<ActionFilter>('ALL');
+  const [device, setDevice] = useState('ALL');
+  const [country, setCountry] = useState('ALL');
   const [rankView, setRankView] = useState<'songs' | 'artists'>('songs');
 
   const [data, setData] = useState<DashboardData | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
-  const [lastRefreshedAt, setLastRefreshedAt] = useState<string>('');
-  const [error, setError] = useState<string | null>(null);
+  const [refreshToken, setRefreshToken] = useState(0);
+  const [checkedAt, setCheckedAt] = useState('');
+  const [settled, setSettled] = useState<{ key: string; error: string | null } | null>(null);
 
-  const loadData = useCallback(async (isManualRefresh = false) => {
-    if (isManualRefresh) {
-      setIsRefreshing(true);
-    } else {
-      setIsLoading(true);
-    }
-    setError(null);
-
-    try {
-      const params = new URLSearchParams();
-      if (eventType !== 'ALL') params.append('event_type', eventType);
-      if (device !== 'ALL') params.append('device', device);
-      if (country !== 'ALL') params.append('country', country);
-      if (isManualRefresh) params.append('refresh', 'true');
-
-      const res = await fetch(`/api/analytics?${params.toString()}`);
-      if (!res.ok) {
-        throw new Error(`Server returned HTTP ${res.status}`);
-      }
-      const json: DashboardData = await res.json();
-      setData(json);
-      setLastRefreshedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-    } catch (err: unknown) {
-      console.error('Failed to load analytics data:', err);
-      setError(err instanceof Error ? err.message : 'Failed to query analytics data');
-    } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
-    }
-  }, [eventType, device, country]);
+  const requestKey = `${action}|${device}|${country}|${refreshToken}`;
+  const isFetching = settled?.key !== requestKey;
+  const error = !isFetching ? settled?.error ?? null : null;
 
   useEffect(() => {
-    let active = true;
-    const fetchInitial = async () => {
-      try {
-        const params = new URLSearchParams();
-        if (eventType !== 'ALL') params.append('event_type', eventType);
-        if (device !== 'ALL') params.append('device', device);
-        if (country !== 'ALL') params.append('country', country);
+    const controller = new AbortController();
+    const params = new URLSearchParams();
+    if (action !== 'ALL') params.set('event_type', action);
+    if (device !== 'ALL') params.set('device', device);
+    if (country !== 'ALL') params.set('country', country);
+    if (refreshToken > 0) params.set('refresh', 'true');
+    const key = `${action}|${device}|${country}|${refreshToken}`;
 
-        const res = await fetch(`/api/analytics?${params.toString()}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    // The previous numbers stay on screen (dimmed) while new ones load, so nothing jumps.
+    fetch(`/api/analytics?${params.toString()}`, { signal: controller.signal })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`The server answered with an error (${res.status}).`);
         const json: DashboardData = await res.json();
-        if (active) {
-          setData(json);
-          setLastRefreshedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-          setIsLoading(false);
-        }
-      } catch (err: unknown) {
-        if (active) {
-          setError(err instanceof Error ? err.message : 'Failed to query analytics data');
-          setIsLoading(false);
-        }
-      }
-    };
+        setData(json);
+        setCheckedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+        setSettled({ key, error: null });
+      })
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) return;
+        setSettled({ key, error: err instanceof Error ? err.message : 'Something went wrong while loading data.' });
+      });
+    return () => controller.abort();
+  }, [action, device, country, refreshToken]);
 
-    fetchInitial();
-
-    return () => {
-      active = false;
-    };
-  }, [eventType, device, country]);
-
-  const handleResetFilters = () => {
-    setEventType('ALL');
+  const hasFilters = action !== 'ALL' || device !== 'ALL' || country !== 'ALL';
+  const clearFilters = () => {
+    setAction('ALL');
     setDevice('ALL');
     setCountry('ALL');
   };
 
-  const hasActiveFilters = eventType !== 'ALL' || device !== 'ALL' || country !== 'ALL';
-
-  // Dynamic totals across dataset for filter options
-  const totalAvailable = data?.kpis?.total_available_events || 720;
-  const actionTotals = data?.dataset_totals?.actions || {
-    play: 188,
-    pause: 189,
-    add_to_playlist: 172,
-    skip: 171,
-  };
-  const deviceTotals = data?.dataset_totals?.devices || {
-    desktop: 270,
-    mobile: 247,
-    web: 203,
-  };
-  const countryTotals = data?.dataset_totals?.countries || {
-    AU: 142,
-    US: 123,
-    IN: 120,
-    CA: 120,
-    UK: 111,
-    DE: 104,
-  };
-
-  // Top song/artist insight calculation
-  const topRankedItem = useMemo(() => {
-    if (!data) return null;
-    if (rankView === 'songs' && data.top_songs && data.top_songs.length > 0) {
-      return {
-        type: 'song',
-        name: data.top_songs[0].song_name,
-        subtitle: data.top_songs[0].artist_name,
-        count: data.top_songs[0].event_count,
-        users: data.top_songs[0].distinct_users,
-      };
-    }
-    if (rankView === 'artists' && data.top_artists && data.top_artists.length > 0) {
-      return {
-        type: 'artist',
-        name: data.top_artists[0].artist_name,
-        subtitle: `${data.top_artists[0].distinct_songs} tracks in catalog`,
-        count: data.top_artists[0].event_count,
-        users: data.top_artists[0].distinct_users,
-      };
-    }
-    return null;
-  }, [data, rankView]);
-
   return (
-    <div className="min-h-screen bg-[#0c0e12] text-[#ededed] flex flex-col font-sans">
-      {/* 1. PROFESSIONAL HEADER */}
-      <header className="border-b border-[#242b35] bg-[#13161c] sticky top-0 z-50 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          {/* Brand Identity */}
-          <div className="flex items-center space-x-3">
-            {/* Neutral Modern Audio Waveform Mark */}
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#10b981] to-[#059669] flex items-center justify-center shadow-md shadow-[#10b981]/15 text-black">
-              <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24">
-                <rect x="2" y="9" width="2.5" height="6" rx="1.25" />
-                <rect x="6.5" y="5" width="2.5" height="14" rx="1.25" />
-                <rect x="11" y="2" width="2.5" height="20" rx="1.25" />
-                <rect x="15.5" y="6" width="2.5" height="12" rx="1.25" />
-                <rect x="20" y="10" width="2.5" height="4" rx="1.25" />
-              </svg>
-            </div>
-            <div>
-              <div className="flex items-center space-x-2">
-                <h1 className="text-base font-bold text-white tracking-tight">Realtime Music Analytics</h1>
-                <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-[#10b981]/15 text-[#10b981] border border-[#10b981]/30">
-                  Analytics Platform
-                </span>
-              </div>
-              <p className="text-[11px] text-[#94a3b8] font-medium">Music Streaming Intelligence</p>
-            </div>
-          </div>
+    <div className="min-h-screen bg-[var(--page)] text-[var(--ink)]">
+      <TopBar
+        data={data}
+        checkedAt={checkedAt}
+        isFetching={isFetching}
+        onRefresh={() => setRefreshToken((n) => n + 1)}
+      />
 
-          {/* Right Status, Data Freshness & Refresh */}
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            {/* Connection Pip */}
-            <div className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-[#181b21] border border-[#262b35]">
-              <span className={`w-2 h-2 rounded-full ${data?.source === 'live_snowflake' ? 'bg-[#10b981] animate-pulse' : 'bg-amber-400'}`}></span>
-              <span className="text-[#94a3b8]">Engine:</span>
-              <span className="text-white font-medium">
-                {data?.source === 'live_snowflake' ? 'Live Snowflake' : 'Verified Snapshot'}
-              </span>
-            </div>
-
-            {/* Warehouse Freshness */}
-            <div className="hidden md:flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-[#181b21] border border-[#262b35] text-[#94a3b8]">
-              <Clock className="w-3.5 h-3.5 text-[#64748b]" />
-              <span>Warehouse Sync:</span>
-              <span className="text-white font-mono text-[11px]">
-                {data?.last_sync_timestamp || '2026-10-25 22:15 UTC'}
-              </span>
-            </div>
-
-            {/* UI Last Refreshed Time */}
-            {lastRefreshedAt && (
-              <span className="hidden lg:inline text-[11px] text-[#64748b]">
-                Checked: {lastRefreshedAt}
-              </span>
-            )}
-
-            {/* Refresh Button */}
-            <button
-              onClick={() => loadData(true)}
-              disabled={isRefreshing || isLoading}
-              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-[#10b981] hover:bg-[#059669] text-black font-semibold text-xs transition-all disabled:opacity-60 cursor-pointer shadow-sm active:scale-95"
-              title="Query latest Snowflake warehouse state"
-            >
-              <RotateCcw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
-              <span>{isRefreshing ? 'Querying...' : 'Refresh'}</span>
-            </button>
-          </div>
+      <main className="mx-auto w-full max-w-[1280px] space-y-5 px-4 py-6 sm:px-6 lg:px-8">
+        <div>
+          <h1 className="text-[26px] font-semibold tracking-tight">Listening insights</h1>
+          <p className="mt-1 text-sm text-[var(--ink-2)]">
+            When, what and how people listen. Built from every play, pause, save and skip in the streaming pipeline.
+          </p>
         </div>
-      </header>
 
-      {/* MAIN CONTAINER */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-5 space-y-4">
-        {/* Error Alert */}
+        <FilterBar
+          data={data}
+          action={action}
+          device={device}
+          country={country}
+          setAction={setAction}
+          setDevice={setDevice}
+          setCountry={setCountry}
+          hasFilters={hasFilters}
+          clearFilters={clearFilters}
+        />
+
         {error && (
-          <div className="p-3.5 rounded-xl bg-red-950/40 border border-red-500/30 flex items-center justify-between text-xs text-red-200">
-            <div className="flex items-center space-x-2">
-              <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-              <span>Error retrieving warehouse telemetry: {error}</span>
-            </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--critical)]/40 bg-[var(--critical)]/10 px-4 py-3 text-sm">
+            <span className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-[var(--critical)]" />
+              Couldn&apos;t load the latest numbers. {error}
+            </span>
             <button
-              onClick={() => loadData(false)}
-              className="px-2.5 py-1 rounded bg-red-500/20 hover:bg-red-500/30 text-white font-medium transition-colors cursor-pointer"
+              type="button"
+              onClick={() => setRefreshToken((n) => n + 1)}
+              className="rounded-lg border border-[var(--border-strong)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--surface-hover)]"
             >
-              Retry
+              Try again
             </button>
           </div>
         )}
 
-        {/* 2. DYNAMIC FILTER BAR */}
-        <div className="bg-[#181b21] border border-[#262b35] rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
-          <div className="flex flex-wrap items-center gap-2.5">
-            <div className="flex items-center space-x-1.5 text-[#94a3b8] pr-1">
-              <Filter className="w-3.5 h-3.5 text-[#10b981]" />
-              <span className="font-semibold text-white">Filters:</span>
-            </div>
-
-            {/* Action Filter */}
-            <div className="flex items-center space-x-1.5 bg-[#12151b] px-2.5 py-1.5 rounded-lg border border-[#262b35]">
-              <label htmlFor="filter-event-type" className="text-[#94a3b8]">Action:</label>
-              <select
-                id="filter-event-type"
-                value={eventType}
-                onChange={(e) => setEventType(e.target.value)}
-                className="bg-transparent text-white font-medium focus:outline-none cursor-pointer"
-              >
-                <option value="ALL" className="bg-[#181b21]">All Actions ({totalAvailable})</option>
-                <option value="play" className="bg-[#181b21]">Play / Streams ({actionTotals.play || 188})</option>
-                <option value="pause" className="bg-[#181b21]">Pause ({actionTotals.pause || 189})</option>
-                <option value="add_to_playlist" className="bg-[#181b21]">Add to Playlist ({actionTotals.add_to_playlist || 172})</option>
-                <option value="skip" className="bg-[#181b21]">Skip ({actionTotals.skip || 171})</option>
-              </select>
-            </div>
-
-            {/* Device Filter */}
-            <div className="flex items-center space-x-1.5 bg-[#12151b] px-2.5 py-1.5 rounded-lg border border-[#262b35]">
-              <label htmlFor="filter-device" className="text-[#94a3b8]">Device:</label>
-              <select
-                id="filter-device"
-                value={device}
-                onChange={(e) => setDevice(e.target.value)}
-                className="bg-transparent text-white font-medium focus:outline-none cursor-pointer"
-              >
-                <option value="ALL" className="bg-[#181b21]">All Devices ({totalAvailable})</option>
-                <option value="desktop" className="bg-[#181b21]">Desktop ({deviceTotals.desktop || 270})</option>
-                <option value="mobile" className="bg-[#181b21]">Mobile ({deviceTotals.mobile || 247})</option>
-                <option value="web" className="bg-[#181b21]">Web Player ({deviceTotals.web || 203})</option>
-              </select>
-            </div>
-
-            {/* Country Filter */}
-            <div className="flex items-center space-x-1.5 bg-[#12151b] px-2.5 py-1.5 rounded-lg border border-[#262b35]">
-              <label htmlFor="filter-country" className="text-[#94a3b8]">Country:</label>
-              <select
-                id="filter-country"
-                value={country}
-                onChange={(e) => setCountry(e.target.value)}
-                className="bg-transparent text-white font-medium focus:outline-none cursor-pointer"
-              >
-                <option value="ALL" className="bg-[#181b21]">All Regions ({totalAvailable})</option>
-                <option value="AU" className="bg-[#181b21]">Australia ({countryTotals.AU || 142})</option>
-                <option value="US" className="bg-[#181b21]">United States ({countryTotals.US || 123})</option>
-                <option value="IN" className="bg-[#181b21]">India ({countryTotals.IN || 120})</option>
-                <option value="CA" className="bg-[#181b21]">Canada ({countryTotals.CA || 120})</option>
-                <option value="UK" className="bg-[#181b21]">United Kingdom ({countryTotals.UK || 111})</option>
-                <option value="DE" className="bg-[#181b21]">Germany ({countryTotals.DE || 104})</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Filter Status Counter & Reset Action */}
-          <div className="flex items-center space-x-3">
-            <span className="text-[#94a3b8]">
-              {data ? (
-                hasActiveFilters ? (
-                  <>
-                    Showing <strong className="text-white">{data.kpis.total_events}</strong> of{' '}
-                    <strong className="text-[#10b981]">{totalAvailable}</strong> events{' '}
-                    <span className="text-[11px] text-[#64748b]">
-                      ({((data.kpis.total_events / totalAvailable) * 100).toFixed(1)}%)
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    Showing all <strong className="text-white">{data.kpis.total_events}</strong> verified events
-                  </>
-                )
-              ) : 'Loading telemetry...'}
-            </span>
-
-            {hasActiveFilters && (
-              <button
-                onClick={handleResetFilters}
-                className="px-2.5 py-1 rounded bg-[#262b35] hover:bg-[#323946] text-white text-[11px] font-medium transition-colors cursor-pointer"
-              >
-                Reset Filters
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Loading Skeleton */}
-        {isLoading && !data && (
-          <div className="space-y-4 animate-pulse">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {[...Array(4)].map((_, i) => (
-                <div key={i} className="h-24 bg-[#181b21] rounded-xl border border-[#262b35]"></div>
-              ))}
-            </div>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div className="h-72 bg-[#181b21] rounded-xl border border-[#262b35]"></div>
-              <div className="h-72 bg-[#181b21] rounded-xl border border-[#262b35]"></div>
+        {data?.source === 'verified_gold_snapshot' && (
+          <div className="flex items-start gap-3 rounded-xl border border-[var(--warning)]/50 bg-[var(--warning)]/10 px-4 py-3 text-sm">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--warning-ink)]" />
+            <div>
+              <span className="font-medium">You&apos;re viewing a saved snapshot.</span>{' '}
+              <span className="text-[var(--ink-2)]">
+                The live warehouse didn&apos;t respond, so these numbers come from the last verified export.
+                {hasFilters && ' Filters are only partly applied to saved data.'}
+              </span>
             </div>
           </div>
         )}
 
-        {/* 3. CORE KPI ROW (4 REFINED CARDS) */}
+        {!data && isFetching && <LoadingState />}
+
         {data && (
-          <>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {/* KPI 1: Listening Events */}
-              <div className="bg-[#181b21] border border-[#262b35] rounded-xl p-4 space-y-1.5 hover:border-[#10b981]/40 transition-colors relative group">
-                <div className="flex items-center justify-between text-xs text-[#94a3b8]">
-                  <span className="font-semibold uppercase tracking-wider text-[11px]">Listening Events</span>
-                  <div className="w-7 h-7 rounded-lg bg-[#10b981]/15 text-[#10b981] flex items-center justify-center">
-                    <Activity className="w-3.5 h-3.5" />
-                  </div>
-                </div>
-                <div className="text-2xl font-black text-white tracking-tight">
-                  {data.kpis.total_events.toLocaleString()}
-                </div>
-                <div className="flex items-center justify-between text-[11px] text-[#64748b]">
-                  <span>{hasActiveFilters ? 'Events matching filters' : '1:1 match with Silver layer'}</span>
-                  {hasActiveFilters && (
-                    <span className="text-[#10b981] font-medium">
-                      {((data.kpis.total_events / totalAvailable) * 100).toFixed(0)}% of total
-                    </span>
-                  )}
-                </div>
-              </div>
+          <div className={`space-y-5 transition-opacity duration-200 ${isFetching ? 'opacity-60' : 'opacity-100'}`} aria-busy={isFetching}>
+            <Takeaways data={data} />
+            <KpiRow data={data} action={action} />
 
-              {/* KPI 2: Unique Listeners */}
-              <div className="bg-[#181b21] border border-[#262b35] rounded-xl p-4 space-y-1.5 hover:border-[#8b5cf6]/40 transition-colors relative group">
-                <div className="flex items-center justify-between text-xs text-[#94a3b8]">
-                  <span className="font-semibold uppercase tracking-wider text-[11px]">Unique Listeners</span>
-                  <div className="w-7 h-7 rounded-lg bg-[#8b5cf6]/15 text-[#8b5cf6] flex items-center justify-center">
-                    <Users className="w-3.5 h-3.5" />
-                  </div>
-                </div>
-                <div className="text-2xl font-black text-white tracking-tight">
-                  {data.kpis.unique_users.toLocaleString()}
-                </div>
-                <div className="text-[11px] text-[#64748b]">
-                  Distinct user profiles with activity in scope
-                </div>
-              </div>
-
-              {/* KPI 3: Songs */}
-              <div className="bg-[#181b21] border border-[#262b35] rounded-xl p-4 space-y-1.5 hover:border-[#38bdf8]/40 transition-colors relative group">
-                <div className="flex items-center justify-between text-xs text-[#94a3b8]">
-                  <span className="font-semibold uppercase tracking-wider text-[11px]">Catalog Tracks</span>
-                  <div className="w-7 h-7 rounded-lg bg-[#38bdf8]/15 text-[#38bdf8] flex items-center justify-center">
-                    <Disc className="w-3.5 h-3.5" />
-                  </div>
-                </div>
-                <div className="text-2xl font-black text-white tracking-tight">
-                  {data.kpis.unique_songs.toLocaleString()}
-                </div>
-                <div className="text-[11px] text-[#64748b]">
-                  Distinct catalog tracks streamed
-                </div>
-              </div>
-
-              {/* KPI 4: Artists */}
-              <div className="bg-[#181b21] border border-[#262b35] rounded-xl p-4 space-y-1.5 hover:border-[#f59e0b]/40 transition-colors relative group">
-                <div className="flex items-center justify-between text-xs text-[#94a3b8]">
-                  <span className="font-semibold uppercase tracking-wider text-[11px]">Distinct Artists</span>
-                  <div className="w-7 h-7 rounded-lg bg-[#f59e0b]/15 text-[#f59e0b] flex items-center justify-center">
-                    <Mic2 className="w-3.5 h-3.5" />
-                  </div>
-                </div>
-                <div className="text-2xl font-black text-white tracking-tight">
-                  {data.kpis.unique_artists.toLocaleString()}
-                </div>
-                <div className="text-[11px] text-[#64748b]">
-                  Artist profiles receiving engagement
-                </div>
-              </div>
-            </div>
-
-            {/* 4. UPPER ROW: HOURLY ACTIVITY HISTOGRAM & TOP SONGS / ARTISTS */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {/* Listening Activity — Hourly Bar Chart (Section 4 D) */}
-              <VerticalHistogram
-                timeline={data.timeline}
-                totalFilteredEvents={data.kpis.total_events}
-              />
-
-              {/* Top Songs & Artists Leaderboard (Section 4 E) */}
-              <div className="bg-[#181b21] border border-[#262b35] rounded-xl p-4 flex flex-col justify-between space-y-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <h2 className="text-sm font-bold text-white tracking-tight">
-                      {rankView === 'songs' ? 'Top Songs by Activity' : 'Top Artists by Activity'}
-                    </h2>
-                    <p className="text-[11px] text-[#94a3b8] mt-0.5">
-                      Business question: <span className="text-white font-medium">Which music receives the most activity?</span>
-                    </p>
-                  </div>
-                  {/* Toggle */}
-                  <div className="flex bg-[#12151b] p-0.5 rounded-lg border border-[#262b35] text-xs">
-                    <button
-                      onClick={() => setRankView('songs')}
-                      className={`px-2.5 py-1 rounded text-[11px] font-medium transition-all cursor-pointer ${
-                        rankView === 'songs' ? 'bg-[#10b981] text-black font-semibold' : 'text-[#94a3b8] hover:text-white'
-                      }`}
-                    >
-                      Songs
-                    </button>
-                    <button
-                      onClick={() => setRankView('artists')}
-                      className={`px-2.5 py-1 rounded text-[11px] font-medium transition-all cursor-pointer ${
-                        rankView === 'artists' ? 'bg-[#10b981] text-black font-semibold' : 'text-[#94a3b8] hover:text-white'
-                      }`}
-                    >
-                      Artists
-                    </button>
-                  </div>
-                </div>
-
-                <div className="space-y-2 py-1">
-                  {rankView === 'songs' ? (
-                    data.top_songs && data.top_songs.length > 0 ? (
-                      data.top_songs.slice(0, 5).map((song, idx) => {
-                        const maxEvents = Math.max(...data.top_songs.map((s) => s.event_count), 1);
-                        const barPct = Math.max((song.event_count / maxEvents) * 100, 4);
-                        const pctOfScope = data.kpis.total_events > 0
-                          ? ((song.event_count / data.kpis.total_events) * 100).toFixed(1)
-                          : '0';
-
-                        return (
-                          <div key={song.song_name} className="p-2.5 bg-[#12151b] rounded-lg border border-[#262b35]/60 space-y-1.5 hover:border-[#10b981]/30 transition-colors">
-                            <div className="flex items-center justify-between text-xs">
-                              <div className="flex items-center space-x-2.5 min-w-0">
-                                <span className="w-4 text-center font-bold text-[#64748b] text-[11px] shrink-0">{idx + 1}</span>
-                                <div className="truncate">
-                                  <span className="font-semibold text-white block text-xs truncate">{song.song_name}</span>
-                                  <span className="text-[10px] text-[#94a3b8] truncate">{song.artist_name}</span>
-                                </div>
-                              </div>
-                              <div className="text-right shrink-0">
-                                <span className="font-bold text-white text-xs">
-                                  {song.event_count} <span className="text-[#10b981] font-normal text-[11px]">({pctOfScope}%)</span>
-                                </span>
-                                <span className="block text-[10px] text-[#64748b]">{song.distinct_users} listeners</span>
-                              </div>
-                            </div>
-                            <div className="w-full bg-[#181b21] h-1.5 rounded-full overflow-hidden">
-                              <div
-                                className="h-full rounded-full transition-all duration-300"
-                                style={{
-                                  width: `${barPct}%`,
-                                  backgroundColor: idx === 0 ? '#10b981' : '#059669',
-                                }}
-                              />
-                            </div>
-                          </div>
-                        );
-                      })
-                    ) : (
-                      <div className="py-8 text-center text-xs text-[#64748b]">No song activity in scope</div>
-                    )
-                  ) : (
-                    data.top_artists && data.top_artists.length > 0 ? (
-                      data.top_artists.slice(0, 5).map((artist, idx) => {
-                        const maxEvents = Math.max(...data.top_artists.map((a) => a.event_count), 1);
-                        const barPct = Math.max((artist.event_count / maxEvents) * 100, 4);
-                        const pctOfScope = data.kpis.total_events > 0
-                          ? ((artist.event_count / data.kpis.total_events) * 100).toFixed(1)
-                          : '0';
-
-                        return (
-                          <div key={artist.artist_name} className="p-2.5 bg-[#12151b] rounded-lg border border-[#262b35]/60 space-y-1.5 hover:border-[#f59e0b]/30 transition-colors">
-                            <div className="flex items-center justify-between text-xs">
-                              <div className="flex items-center space-x-2.5 min-w-0">
-                                <span className="w-4 text-center font-bold text-[#64748b] text-[11px] shrink-0">{idx + 1}</span>
-                                <div className="truncate">
-                                  <span className="font-semibold text-white block text-xs truncate">{artist.artist_name}</span>
-                                  <span className="text-[10px] text-[#94a3b8]">{artist.distinct_songs} tracks in catalog</span>
-                                </div>
-                              </div>
-                              <div className="text-right shrink-0">
-                                <span className="font-bold text-white text-xs">
-                                  {artist.event_count} <span className="text-[#f59e0b] font-normal text-[11px]">({pctOfScope}%)</span>
-                                </span>
-                                <span className="block text-[10px] text-[#64748b]">{artist.distinct_users} listeners</span>
-                              </div>
-                            </div>
-                            <div className="w-full bg-[#181b21] h-1.5 rounded-full overflow-hidden">
-                              <div
-                                className="h-full rounded-full transition-all duration-300"
-                                style={{
-                                  width: `${barPct}%`,
-                                  backgroundColor: idx === 0 ? '#f59e0b' : '#d97706',
-                                }}
-                              />
-                            </div>
-                          </div>
-                        );
-                      })
-                    ) : (
-                      <div className="py-8 text-center text-xs text-[#64748b]">No artist activity in scope</div>
-                    )
-                  )}
-                </div>
-
-                {/* Data-supported Insight */}
-                {topRankedItem && (
-                  <div className="bg-[#12151b] border border-[#262b35] rounded-lg p-2.5 flex items-start space-x-2 text-xs">
-                    <TrendingUp className="w-3.5 h-3.5 text-[#10b981] shrink-0 mt-0.5" />
-                    <div className="text-[#94a3b8] leading-relaxed text-[11px]">
-                      <strong className="text-white">Leader Insight:</strong>{' '}
-                      <strong className="text-white">{topRankedItem.name}</strong> ranks #1 with{' '}
-                      <strong className="text-white">{topRankedItem.count}</strong> events across{' '}
-                      <strong className="text-white">{topRankedItem.users}</strong> listeners.
-                    </div>
-                  </div>
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+              <ChartCard
+                className="lg:col-span-8"
+                title="When do people listen?"
+                headline={peakHeadline(data)}
+                table={{
+                  columns: ['Hour (UTC)', 'Events', 'Listeners'],
+                  rows: data.timeline.map((t) => [`${hourLabel(t.hour)} – ${hourLabel((t.hour + 1) % 24)}`, t.events, t.users ?? '—']),
+                }}
+                footer="Events per hour of the day, in UTC. Hover a column for details."
+              >
+                {data.timeline.length ? (
+                  <HourlyChart timeline={data.timeline} totalEvents={data.kpis.total_events} />
+                ) : (
+                  <EmptyState message="No activity matches these filters." />
                 )}
-              </div>
+              </ChartCard>
+
+              <ChartCard
+                className="lg:col-span-4"
+                title="What do listeners do?"
+                headline={actionHeadline(data, action)}
+                table={{
+                  columns: ['Action', 'Events', 'Share'],
+                  rows: data.event_distribution.map((e) => [actionLabel(e.type), e.count, pct(e.count, data.kpis.total_events, 1)]),
+                }}
+              >
+                {data.event_distribution.length ? (
+                  <ActionMix items={data.event_distribution} />
+                ) : (
+                  <EmptyState message="No actions match these filters." />
+                )}
+              </ChartCard>
             </div>
 
-            {/* 5. LOWER ROW: COUNTRY BREAKDOWN & LISTENER ACTIONS + DEVICES */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {/* Country Activity & Map (Section 4 F) */}
-              <GeographicMap
-                countryData={data.country_distribution}
-                selectedCountry={country}
-                onSelectCountry={(c) => setCountry(c)}
-                totalFilteredEvents={data.kpis.total_events}
-              />
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+              <TopMusicCard data={data} view={rankView} setView={setRankView} />
 
-              {/* Listener Actions & Devices Distribution (Section 4 G & 4 H) */}
-              <div className="bg-[#181b21] border border-[#262b35] rounded-xl p-4 flex flex-col justify-between space-y-4">
-                {/* Listener Actions Breakdown */}
-                <div className="space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h2 className="text-sm font-bold text-white tracking-tight">Listener Actions</h2>
-                      <p className="text-[11px] text-[#94a3b8]">
-                        Business question: <span className="text-white font-medium">How do listeners interact with music?</span>
-                      </p>
-                    </div>
-                    <span className="text-[10px] text-[#64748b]">Sum: 100%</span>
-                  </div>
-
-                  <div className="space-y-2">
-                    {data.event_distribution.map((dist) => {
-                      const total = data.kpis.total_events || 1;
-                      const pct = ((dist.count / total) * 100).toFixed(1);
-                      const colorMap: Record<string, string> = {
-                        play: '#10b981',
-                        pause: '#f59e0b',
-                        add_to_playlist: '#38bdf8',
-                        skip: '#ef4444',
-                      };
-                      const IconMap: Record<string, React.ElementType> = {
-                        play: Play,
-                        pause: Pause,
-                        add_to_playlist: FolderPlus,
-                        skip: SkipForward,
-                      };
-                      const labelMap: Record<string, string> = {
-                        play: 'Play (Streams)',
-                        pause: 'Pause Interaction',
-                        add_to_playlist: 'Add to Playlist',
-                        skip: 'Track Skip',
-                      };
-                      const ActionIcon = IconMap[dist.type] || Activity;
-                      const color = colorMap[dist.type] || '#94a3b8';
-
-                      return (
-                        <div key={dist.type} className="space-y-1">
-                          <div className="flex justify-between items-center text-xs">
-                            <div className="flex items-center space-x-1.5">
-                              <ActionIcon className="w-3.5 h-3.5" style={{ color }} />
-                              <span className="font-medium text-white text-[11px]">{labelMap[dist.type] || dist.type}</span>
-                            </div>
-                            <span className="text-[#94a3b8] text-[11px]">
-                              <strong className="text-white font-mono">{dist.count}</strong> ({pct}%)
-                            </span>
-                          </div>
-                          <div className="w-full bg-[#12151b] h-1.5 rounded-full overflow-hidden">
-                            <div
-                              className="h-full rounded-full transition-all duration-300"
-                              style={{ width: `${pct}%`, backgroundColor: color }}
-                            />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Device Platforms Breakdown */}
-                <div className="space-y-2.5 pt-3 border-t border-[#262b35]">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h2 className="text-sm font-bold text-white tracking-tight">Device Platforms</h2>
-                      <p className="text-[11px] text-[#94a3b8]">
-                        Business question: <span className="text-white font-medium">Which devices are used most often?</span>
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2">
-                    {data.device_distribution.map((dev) => {
-                      const total = data.kpis.total_events || 1;
-                      const pct = ((dev.count / total) * 100).toFixed(1);
-                      const Icon = dev.device === 'desktop' ? Monitor : dev.device === 'mobile' ? Smartphone : Laptop;
-                      return (
-                        <div key={dev.device} className="bg-[#12151b] p-3 rounded-lg border border-[#262b35]/60 text-center space-y-1 hover:border-[#10b981]/30 transition-colors">
-                          <Icon className="w-4 h-4 mx-auto text-[#10b981]" />
-                          <div className="text-[11px] font-semibold text-white capitalize">{dev.device}</div>
-                          <div className="text-lg font-bold text-white">{pct}%</div>
-                          <div className="text-[10px] text-[#64748b]">{dev.count} events</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
+              <ChartCard
+                className="lg:col-span-5"
+                title="Which devices do they use?"
+                headline={deviceHeadline(data)}
+                table={{
+                  columns: ['Device', 'Events', 'Share'],
+                  rows: data.device_distribution.map((d) => [deviceLabel(d.device), d.count, pct(d.count, data.kpis.total_events, 1)]),
+                }}
+              >
+                {data.device_distribution.length ? (
+                  <DeviceWaffle items={data.device_distribution} />
+                ) : (
+                  <EmptyState message="No device data for these filters." />
+                )}
+              </ChartCard>
             </div>
-          </>
+
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+              <ChartCard
+                className="lg:col-span-7"
+                title="Where are they listening?"
+                headline={countryHeadline(data)}
+                table={{
+                  columns: ['Country', 'Events', 'Listeners', 'Share'],
+                  rows: [...data.country_distribution]
+                    .sort((a, b) => b.count - a.count)
+                    .map((c) => [countryLabel(c.country), c.count, c.users, pct(c.count, data.kpis.total_events, 1)]),
+                }}
+              >
+                {data.country_distribution.length ? (
+                  <CountryLollipop items={data.country_distribution} selected={country} onSelect={setCountry} />
+                ) : (
+                  <EmptyState message="No country data for these filters." />
+                )}
+              </ChartCard>
+
+              <AboutDataCard data={data} checkedAt={checkedAt} />
+            </div>
+          </div>
         )}
       </main>
     </div>
   );
+}
+
+function TopBar({
+  data,
+  checkedAt,
+  isFetching,
+  onRefresh,
+}: {
+  data: DashboardData | null;
+  checkedAt: string;
+  isFetching: boolean;
+  onRefresh: () => void;
+}) {
+  const live = data?.source === 'live_snowflake';
+  return (
+    <header className="sticky top-0 z-40 border-b border-[var(--border)] bg-[var(--surface)]/85 backdrop-blur">
+      <div className="mx-auto flex h-14 w-full max-w-[1280px] items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--accent)] text-[var(--on-accent)]">
+            <Headphones className="h-4 w-4" />
+          </span>
+          <span className="truncate text-sm font-semibold">Realtime Music Analytics</span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {data && (
+            <span
+              className="hidden items-center gap-1.5 rounded-full border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--ink-2)] md:inline-flex"
+              title={live ? 'Numbers come straight from the data warehouse.' : 'The warehouse was unreachable, so a saved copy is shown.'}
+            >
+              {live ? (
+                <CircleCheck className="h-3.5 w-3.5 text-[var(--good-ink)]" />
+              ) : (
+                <AlertTriangle className="h-3.5 w-3.5 text-[var(--warning-ink)]" />
+              )}
+              {live ? 'Live data' : 'Saved snapshot'}
+            </span>
+          )}
+          {data && (
+            <span className="hidden items-center gap-1.5 text-xs text-[var(--ink-3)] lg:inline-flex">
+              <Clock3 className="h-3.5 w-3.5" />
+              Data updated {friendlyTimestamp(data.last_sync_timestamp)}
+              {checkedAt && <span className="text-[var(--ink-3)]">· checked {checkedAt}</span>}
+            </span>
+          )}
+          <ThemeToggle />
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={isFetching}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3 text-xs font-medium text-[var(--on-accent)] transition-opacity hover:opacity-90 disabled:opacity-60"
+            title="Get the latest numbers from the warehouse"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">{isFetching ? "Updating…" : "Refresh"}</span>
+          </button>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+// The theme lives on <html data-theme>, set before first paint by the script in layout.tsx.
+const themeListeners = new Set<() => void>();
+const subscribeTheme = (cb: () => void) => {
+  themeListeners.add(cb);
+  return () => themeListeners.delete(cb);
+};
+const readTheme = (): Theme => {
+  const t = document.documentElement.dataset.theme;
+  return t === 'light' || t === 'dark' ? t : 'system';
+};
+
+function ThemeToggle() {
+  const theme = useSyncExternalStore(subscribeTheme, readTheme, () => 'system' as Theme);
+
+  const next: Record<Theme, Theme> = { system: 'light', light: 'dark', dark: 'system' };
+  const labels: Record<Theme, string> = { system: 'Match system', light: 'Light', dark: 'Dark' };
+  const Icon = theme === 'light' ? Sun : theme === 'dark' ? Moon : SunMoon;
+
+  const cycle = () => {
+    const t = next[theme];
+    const root = document.documentElement;
+    if (t === 'system') delete root.dataset.theme;
+    else root.dataset.theme = t;
+    try {
+      if (t === 'system') localStorage.removeItem('theme');
+      else localStorage.setItem('theme', t);
+    } catch {
+      /* storage unavailable: the choice lasts for this visit only */
+    }
+    themeListeners.forEach((cb) => cb());
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={cycle}
+      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--ink-2)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink)]"
+      title={`Theme: ${labels[theme]} (click to change)`}
+      aria-label={`Theme: ${labels[theme]}. Click to change.`}
+    >
+      <Icon className="h-4 w-4" />
+    </button>
+  );
+}
+
+function FilterBar({
+  data,
+  action,
+  device,
+  country,
+  setAction,
+  setDevice,
+  setCountry,
+  hasFilters,
+  clearFilters,
+}: {
+  data: DashboardData | null;
+  action: ActionFilter;
+  device: string;
+  country: string;
+  setAction: (v: ActionFilter) => void;
+  setDevice: (v: string) => void;
+  setCountry: (v: string) => void;
+  hasFilters: boolean;
+  clearFilters: () => void;
+}) {
+  const totalAll = data?.kpis.total_available_events ?? data?.kpis.total_events ?? 0;
+  const shown = data?.kpis.total_events ?? 0;
+  const totals = data?.dataset_totals;
+
+  const selectClass =
+    'h-8 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 text-xs font-medium text-[var(--ink)] hover:border-[var(--border-strong)] cursor-pointer';
+
+  return (
+    <Card className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <Segmented<ActionFilter>
+          label="Filter by action"
+          value={action}
+          onChange={setAction}
+          options={[{ value: 'ALL', label: 'All actions' }, ...ACTIONS.map((a) => ({ value: a.key as ActionFilter, label: a.label }))]}
+        />
+        <label className="flex items-center gap-2 text-xs text-[var(--ink-2)]">
+          Device
+          <select value={device} onChange={(e) => setDevice(e.target.value)} className={selectClass}>
+            <option value="ALL">All devices</option>
+            {DEVICES.map((d) => (
+              <option key={d.key} value={d.key}>
+                {d.label}
+                {totals?.devices?.[d.key] ? ` (${fmt(totals.devices[d.key])})` : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-xs text-[var(--ink-2)]">
+          Country
+          <select value={country} onChange={(e) => setCountry(e.target.value)} className={selectClass}>
+            <option value="ALL">All countries</option>
+            {Object.entries(COUNTRY_NAMES).map(([code, name]) => (
+              <option key={code} value={code}>
+                {name}
+                {totals?.countries?.[code] ? ` (${fmt(totals.countries[code])})` : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="flex items-center gap-3 text-xs text-[var(--ink-2)]">
+        {data && (
+          <span className="tabular">
+            {hasFilters ? (
+              <>
+                Showing <strong className="text-[var(--ink)]">{fmt(shown)}</strong> of {fmt(totalAll)} events ({pct(shown, totalAll)})
+              </>
+            ) : (
+              <>
+                Showing all <strong className="text-[var(--ink)]">{fmt(shown)}</strong> events
+              </>
+            )}
+          </span>
+        )}
+        {hasFilters && (
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="inline-flex h-8 items-center gap-1 rounded-lg px-2.5 font-medium text-[var(--accent-ink)] hover:bg-[var(--accent-soft)]"
+          >
+            <X className="h-3.5 w-3.5" />
+            Clear filters
+          </button>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function KpiRow({ data, action }: { data: DashboardData; action: ActionFilter }) {
+  const { kpis } = data;
+  const perListener = kpis.unique_users > 0 ? kpis.total_events / kpis.unique_users : 0;
+  const plays = data.event_distribution.find((e) => e.type === 'play')?.count ?? 0;
+  const skips = data.event_distribution.find((e) => e.type === 'skip')?.count ?? 0;
+  const skipRateAvailable = action === 'ALL' && plays + skips > 0;
+
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <Card className="min-w-0 p-5">
+        <div className="flex items-center gap-2 text-[13px] text-[var(--ink-2)]">
+          <Activity className="h-4 w-4 text-[var(--ink-3)]" />
+          Listening events
+        </div>
+        <div className="mt-2 flex items-end justify-between gap-3">
+          <div className="text-[40px] font-semibold leading-none tracking-tight">{fmt(kpis.total_events)}</div>
+          <Sparkline timeline={data.timeline} width={110} height={34} />
+        </div>
+        <p className="mt-3 text-xs text-[var(--ink-3)]">Every play, pause, save and skip</p>
+      </Card>
+
+      <StatTile
+        icon={Headphones}
+        label="Listeners"
+        value={fmt(kpis.unique_users)}
+        note="People with at least one event"
+      />
+      <StatTile
+        icon={Repeat2}
+        label="Actions per listener"
+        value={perListener.toFixed(1)}
+        note="Average events for each listener"
+      />
+      <StatTile
+        icon={SkipForward}
+        label="Skip rate"
+        value={skipRateAvailable ? pct(skips, plays + skips, 1) : '—'}
+        note={skipRateAvailable ? `${fmt(skips)} skips for every ${fmt(plays)} plays` : 'Choose “All actions” to see this'}
+      />
+      <div className="sm:col-span-2 lg:col-span-4">
+        <Card className="flex flex-wrap items-center gap-x-8 gap-y-2 px-5 py-3 text-sm">
+          <span className="flex items-center gap-2 text-[var(--ink-2)]">
+            <Disc3 className="h-4 w-4 text-[var(--ink-3)]" />
+            Catalog in view:
+          </span>
+          <span>
+            <strong className="font-semibold">{fmt(kpis.unique_songs)}</strong>{' '}
+            <span className="text-[var(--ink-2)]">songs</span>
+          </span>
+          <span>
+            <strong className="font-semibold">{fmt(kpis.unique_artists)}</strong>{' '}
+            <span className="text-[var(--ink-2)]">artists</span>
+          </span>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function StatTile({
+  icon: Icon,
+  label,
+  value,
+  note,
+}: {
+  icon: React.ElementType;
+  label: string;
+  value: string;
+  note: string;
+}) {
+  return (
+    <Card className="min-w-0 p-5">
+      <div className="flex items-center gap-2 text-[13px] text-[var(--ink-2)]">
+        <Icon className="h-4 w-4 text-[var(--ink-3)]" />
+        {label}
+      </div>
+      <div className="mt-2 text-[40px] font-semibold leading-none tracking-tight">{value}</div>
+      <p className="mt-3 text-xs text-[var(--ink-3)]">{note}</p>
+    </Card>
+  );
+}
+
+function Takeaways({ data }: { data: DashboardData }) {
+  const lines: React.ReactNode[] = [];
+  const total = data.kpis.total_events;
+
+  const peak = [...data.timeline].sort((a, b) => b.events - a.events)[0];
+  if (peak && peak.events > 0) {
+    lines.push(
+      <>
+        Busiest hour is <strong>{hourLabel(peak.hour)} UTC</strong>, with {pct(peak.events, total)} of all activity.
+      </>,
+    );
+  }
+  const song = data.top_songs[0];
+  if (song) {
+    lines.push(
+      <>
+        <strong>{song.song_name}</strong> by {song.artist_name} is the most active song.
+      </>,
+    );
+  }
+  const dev = [...data.device_distribution].sort((a, b) => b.count - a.count)[0];
+  if (dev) {
+    lines.push(
+      <>
+        <strong>{deviceLabel(dev.device)}</strong> leads devices with {pct(dev.count, total)} of activity.
+      </>,
+    );
+  }
+  const ctry = [...data.country_distribution].sort((a, b) => b.count - a.count)[0];
+  if (ctry) {
+    lines.push(
+      <>
+        <strong>{countryLabel(ctry.country)}</strong> is the most active country.
+      </>,
+    );
+  }
+  if (!lines.length) return null;
+
+  return (
+    <Card className="px-5 py-4">
+      <h2 className="text-[13px] font-medium text-[var(--ink-2)]">Key takeaways</h2>
+      <ul className="mt-2 grid gap-x-8 gap-y-1.5 text-sm text-[var(--ink)] md:grid-cols-2">
+        {lines.map((l, i) => (
+          <li key={i} className="flex gap-2">
+            <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
+            <span>{l}</span>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+function TopMusicCard({
+  data,
+  view,
+  setView,
+}: {
+  data: DashboardData;
+  view: 'songs' | 'artists';
+  setView: (v: 'songs' | 'artists') => void;
+}) {
+  const items: RankedItem[] = useMemo(
+    () =>
+      view === 'songs'
+        ? data.top_songs.map((s) => ({
+            key: `${s.song_name}-${s.artist_name}`,
+            name: s.song_name,
+            detail: s.artist_name,
+            value: s.event_count,
+            listeners: s.distinct_users,
+          }))
+        : data.top_artists.map((a) => ({
+            key: a.artist_name,
+            name: a.artist_name,
+            detail: `${a.distinct_songs} ${a.distinct_songs === 1 ? 'song' : 'songs'}`,
+            value: a.event_count,
+            listeners: a.distinct_users,
+          })),
+    [data, view],
+  );
+
+  const leader = items[0];
+  return (
+    <ChartCard
+      className="lg:col-span-7"
+      title={view === 'songs' ? 'Which songs get the most activity?' : 'Which artists get the most activity?'}
+      headline={leader ? <>{leader.name} is #1 with {fmt(leader.value)} events</> : undefined}
+      action={
+        <Segmented
+          label="Rank by"
+          value={view}
+          onChange={setView}
+          options={[
+            { value: 'songs', label: 'Songs' },
+            { value: 'artists', label: 'Artists' },
+          ]}
+        />
+      }
+      table={{
+        columns: [view === 'songs' ? 'Song' : 'Artist', view === 'songs' ? 'Artist' : 'Songs', 'Events', 'Listeners'],
+        rows: items.map((i) => [i.name, i.detail, i.value, i.listeners]),
+        numeric: [2, 3],
+      }}
+    >
+      {items.length ? (
+        <RankedBars items={items} totalEvents={data.kpis.total_events} />
+      ) : (
+        <EmptyState message="No music matches these filters." />
+      )}
+    </ChartCard>
+  );
+}
+
+function AboutDataCard({ data, checkedAt }: { data: DashboardData; checkedAt: string }) {
+  const live = data.source === 'live_snowflake';
+  const steps = ['App events', 'Kafka stream', 'Raw storage', 'Warehouse', 'Clean tables', 'This page'];
+  return (
+    <Card className="flex min-w-0 flex-col p-5 lg:col-span-5">
+      <h2 className="text-[13px] font-medium text-[var(--ink-2)]">About this data</h2>
+      <p className="mt-1 text-[17px] font-semibold leading-snug">
+        {live ? 'Live from the warehouse' : 'Showing a saved snapshot'}
+      </p>
+
+      <dl className="mt-4 grid grid-cols-2 gap-4 text-sm">
+        <div>
+          <dt className="text-xs text-[var(--ink-3)]">Last updated</dt>
+          <dd className="mt-0.5 font-medium">{friendlyTimestamp(data.last_sync_timestamp)}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-[var(--ink-3)]">Checked by you</dt>
+          <dd className="mt-0.5 font-medium">{checkedAt || '—'}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-[var(--ink-3)]">Events in warehouse</dt>
+          <dd className="mt-0.5 font-medium tabular">{fmt(data.kpis.total_available_events ?? data.kpis.total_events)}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-[var(--ink-3)]">Status</dt>
+          <dd className="mt-0.5 flex items-center gap-1.5 font-medium">
+            {live ? (
+              <CircleCheck className="h-4 w-4 text-[var(--good-ink)]" />
+            ) : (
+              <AlertTriangle className="h-4 w-4 text-[var(--warning-ink)]" />
+            )}
+            {live ? 'Connected' : 'Warehouse offline'}
+          </dd>
+        </div>
+      </dl>
+
+      <div className="mt-5 border-t border-[var(--border)] pt-4">
+        <div className="flex items-center gap-2 text-xs text-[var(--ink-3)]">
+          <Database className="h-3.5 w-3.5" />
+          How events reach this page
+        </div>
+        <ol className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
+          {steps.map((s, i) => (
+            <li key={s} className="flex items-center gap-1.5">
+              <span className="rounded-md bg-[var(--surface-sunken)] px-2 py-1 text-[var(--ink-2)]">{s}</span>
+              {i < steps.length - 1 && <span className="text-[var(--ink-3)]">→</span>}
+            </li>
+          ))}
+        </ol>
+        <p className="mt-3 text-xs text-[var(--ink-3)]">
+          Duplicate and broken events are removed before they reach these charts.
+        </p>
+      </div>
+    </Card>
+  );
+}
+
+function LoadingState() {
+  return (
+    <div className="space-y-5" aria-busy="true" aria-label="Loading">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="h-[132px] animate-pulse rounded-2xl bg-[var(--surface-sunken)]" />
+        ))}
+      </div>
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+        <div className="h-[340px] animate-pulse rounded-2xl bg-[var(--surface-sunken)] lg:col-span-8" />
+        <div className="h-[340px] animate-pulse rounded-2xl bg-[var(--surface-sunken)] lg:col-span-4" />
+      </div>
+    </div>
+  );
+}
+
+function peakHeadline(data: DashboardData) {
+  const peak = [...data.timeline].sort((a, b) => b.events - a.events)[0];
+  if (!peak || peak.events === 0) return 'No activity yet';
+  return `Activity peaks at ${hourLabel(peak.hour)} UTC`;
+}
+
+function actionHeadline(data: DashboardData, action: ActionFilter) {
+  if (action !== 'ALL') return `Showing ${actionLabel(action).toLowerCase()} only`;
+  const top = [...data.event_distribution].sort((a, b) => b.count - a.count)[0];
+  const spread =
+    data.event_distribution.length > 1
+      ? Math.max(...data.event_distribution.map((e) => e.count)) - Math.min(...data.event_distribution.map((e) => e.count))
+      : 0;
+  if (top && spread / Math.max(data.kpis.total_events, 1) < 0.05) return 'Actions are evenly split';
+  return top ? `${actionLabel(top.type)} are the most common` : 'No actions';
+}
+
+function deviceHeadline(data: DashboardData) {
+  const top = [...data.device_distribution].sort((a, b) => b.count - a.count)[0];
+  return top ? `${deviceLabel(top.device)} leads with ${pct(top.count, data.kpis.total_events)}` : 'No device data';
+}
+
+function countryHeadline(data: DashboardData) {
+  return `${data.country_distribution.length} ${data.country_distribution.length === 1 ? 'country' : 'countries'} with activity`;
 }

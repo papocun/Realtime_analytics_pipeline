@@ -1,0 +1,97 @@
+name: Deploy dbt
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dbt-deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: dbt build on Snowflake
+    # Deploy only commits that passed CI on main, or when started by hand.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+      SNOWFLAKE_ROLE: ${{ vars.SNOWFLAKE_ROLE }}
+      SNOWFLAKE_WAREHOUSE: ${{ vars.SNOWFLAKE_WAREHOUSE || 'COMPUTE_WH' }}
+      SNOWFLAKE_DATABASE: ${{ vars.SNOWFLAKE_DATABASE || 'SPOTIFY_DB' }}
+      DBT_ARGS: --project-dir spotify_dbt --profiles-dir .github/dbt --target prod
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # workflow_run starts on the default branch; deploy exactly the commit CI tested.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies from the lockfile
+        run: uv sync --frozen
+
+      - name: Write Snowflake key
+        env:
+          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+        run: |
+          for name in SNOWFLAKE_ACCOUNT SNOWFLAKE_USER SNOWFLAKE_ROLE SNOWFLAKE_PRIVATE_KEY; do
+            if [ -z "${!name}" ]; then echo "::error::$name is not configured for the production environment"; exit 1; fi
+          done
+          key_path="$RUNNER_TEMP/rsa_key.p8"
+          umask 077
+          printf '%s\n' "$SNOWFLAKE_PRIVATE_KEY" > "$key_path"
+          echo "SNOWFLAKE_PRIVATE_KEY_PATH=$key_path" >> "$GITHUB_ENV"
+
+      - name: Check connection
+        run: uv run dbt debug $DBT_ARGS
+
+      # build runs models and their tests in dependency order; a failing test stops everything downstream of it.
+      - name: Build models and run tests
+        run: uv run dbt build $DBT_ARGS
+
+      - name: Summarise results
+        if: always()
+        run: |
+          uv run python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import collections, json, pathlib
+          path = pathlib.Path("spotify_dbt/target/run_results.json")
+          if not path.exists():
+              print("dbt produced no run results.")
+          else:
+              results = json.loads(path.read_text())["results"]
+              counts = collections.Counter(r["status"] for r in results)
+              print("### dbt build\n")
+              print("| Status | Count |\n|---|---|")
+              for status, n in sorted(counts.items()):
+                  print(f"| {status} | {n} |")
+              failed = [r["unique_id"] for r in results if r["status"] in ("error", "fail")]
+              if failed:
+                  print("\n**Failed:**\n" + "\n".join(f"- `{f}`" for f in failed))
+          EOF
+
+      - name: Keep dbt artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-artifacts-${{ github.run_id }}
+          path: |
+            spotify_dbt/target/run_results.json
+            spotify_dbt/target/manifest.json
+          if-no-files-found: ignore
+
+      - name: Remove Snowflake key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/rsa_key.p8"

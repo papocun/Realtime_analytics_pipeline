@@ -1,0 +1,26 @@
+# Used only by GitHub Actions (--profiles-dir .github/dbt); local runs keep using ~/.dbt/profiles.yml.
+spotify_dbt:
+  target: ci
+  outputs:
+    ci:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT', 'ci_placeholder') }}"
+      user: "{{ env_var('SNOWFLAKE_USER', 'ci_placeholder') }}"
+      authenticator: snowflake_jwt
+      private_key_path: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PATH', '/dev/null') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE', 'PUBLIC') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'COMPUTE_WH') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE', 'SPOTIFY_DB') }}"
+      schema: "{{ env_var('SNOWFLAKE_SCHEMA', 'BRONZE') }}"
+      threads: 4
+    prod:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      authenticator: snowflake_jwt
+      private_key_path: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PATH') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE') }}"
+      schema: "{{ env_var('SNOWFLAKE_SCHEMA', 'BRONZE') }}"
+      threads: 4

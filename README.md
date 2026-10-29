@@ -1,216 +1,133 @@
-# Music Analytics Data Pipeline
+# Music Analytics Pipeline
 
-An end-to-end data engineering project demonstrating a batch lakehouse architecture on local infrastructure. Synthetic Spotify-style listening events flow from a Python producer through Kafka, land in MinIO object storage, are orchestrated into Snowflake by Apache Airflow, transformed through Bronze → Silver → Gold layers by dbt, and surfaced in a custom Next.js analytics dashboard.
+Every time someone presses play, pauses a track, skips a song or saves it to a playlist, a tiny signal is created. On its own it means nothing. Millions of them together answer real questions: *when do people listen, what do they love, what do they skip, and where are they?*
 
-> **Note:** This is a batch pipeline. The producer emits events near-continuously; the warehouse updates on the Airflow DAG schedule (~hourly) plus dbt transformation time. The dashboard is not a real-time stream.
+This project follows one of those signals from the moment it is created to the moment it becomes a number on a dashboard. Along the way it passes through a message stream, an object-storage lake, an orchestrator, a cloud warehouse and a layer of data-quality checks. Each stop exists because of a specific problem that would otherwise lose, duplicate or corrupt the data.
 
----
-
-## Architecture
-
-![End-to-End Music Analytics Pipeline](image/End-to-End%20Music%20Analytics%20Pipeline.png)
+![Music analytics pipeline architecture](image/architecture.png)
 
 ---
 
-## Data Flow
+## 1. A listen is born
+
+A Python producer plays the role of a music app. It invents listeners, songs and artists, then emits listening events: `play`, `pause`, `skip` and `add_to_playlist`, each tagged with a device and a country.
+
+The producer can tell three kinds of stories:
+
+- **Live**: a steady trickle of events, like a real app on a normal day.
+- **Historical**: a burst of past events spread over weeks, used to backfill the warehouse.
+- **Replay**: the same small set of events every time, used to prove that sending something twice never counts it twice.
+
+Songs and listeners get **deterministic IDs** (UUIDv5), so "Levitating by Dua Lipa" is the same song no matter how many times the producer restarts. Without that, every restart would create a new copy of every song in the warehouse.
+
+## 2. Into the stream
+
+Events are published to a **Kafka** topic with `acks=all` and retries, which guarantees that each event arrives *at least once*. The phrase "at least once" carries a trade-off the rest of the pipeline has to deal with: an event can occasionally arrive twice, but it is never silently lost.
+
+## 3. Landing safely in the lake
+
+A consumer reads the stream in batches and writes each batch to **MinIO** (S3-compatible object storage) as a JSON Lines file, partitioned by date and hour:
 
 ```
-Python Producer (stimulator/datagenerator.py)
-    │  Kafka topic: spotify-events  (at-least-once, acks=all)
-    ▼
-Kafka Consumer (consumer/kafka_to_minio.py)
-    │  Batches events → NDJSON files uploaded to MinIO
-    ▼
-MinIO Object Storage
-    │  Prefix: bronze/date=YYYY-MM-DD/hour=HH/
-    │  Airflow DAG (@hourly) — file-manifest idempotency
-    ▼
-Snowflake Bronze  (SPOTIFY_EVENTS_BRONZE + BRONZE_FILE_MANIFEST)
-    │  dbt: staging → silver → gold
-    ▼
-Snowflake Silver  (silver_spotify_events — deduplicated, quarantine-filtered)
-    ▼
-Snowflake Gold    (star schema: dims + facts + aggregates)
-    │  Next.js API route — single CTE query, 60 s server-side cache
-    ▼
-Next.js Dashboard  (http://localhost:3000)
+bronze/date=2026-10-20/hour=15/spotify_events_2026-10-20T15-04-12_9f3a1c2e.json
 ```
 
----
+The consumer moves its Kafka position forward **only after the file is safely stored**. If it crashes halfway, it simply re-reads the batch on restart. Each file name also carries a random suffix, so two batches written in the same second can never overwrite each other.
 
-## Technology Stack
+This raw landing zone is the **Bronze** layer: an untouched, append-only record of everything that happened.
 
-| Layer | Technology |
-|---|---|
-| Event Generation | Python 3.13 · Faker |
-| Message Bus | Apache Kafka (Confluent 7.4) · ZooKeeper · Kafdrop |
-| Object Storage | MinIO (S3-compatible) |
-| Orchestration | Apache Airflow 2.9 (Dockerised) |
-| Data Warehouse | Snowflake |
-| Transformation | dbt-core 1.12 · dbt-snowflake |
-| Dashboard | Next.js 15 · React · TypeScript |
-| Package Manager | uv |
-| CI | GitHub Actions |
+## 4. The hourly pickup
 
----
+Every hour an **Apache Airflow** DAG walks through the lake and loads new files into **Snowflake**.
 
-## Dashboard
+The difficult part is remembering what has already been loaded. A **file manifest** table records every file by name, ETag and size, along with its status (`PROCESSING`, `SUCCESS` or `FAILED`):
 
-The dashboard queries the Snowflake Gold layer and supports interactive filtering by event type, device, and country.
+- A file that loaded successfully is skipped next time.
+- A file that was rewritten, or that failed halfway, is picked up again.
+- A file's rows and its `SUCCESS` mark are committed in one transaction, so a file is either fully in the warehouse or not there at all.
 
-**Analytical datasets exposed:**
+The result: running the DAG once or a hundred times produces the same Bronze table.
 
-| Dataset | Description |
-|---|---|
-| KPI summary | Total events, unique users, unique songs, unique artists |
-| Hourly timeline | Event volume and active users by hour |
-| Top songs | Play/event counts and distinct listener reach per track |
-| Top artists | Event volume, distinct songs, and distinct listeners per artist |
-| Event distribution | Breakdown by event type (play, pause, skip, add\_to\_playlist) |
-| Device distribution | Desktop / Mobile / Web share |
-| Country distribution | Events and unique users per country |
+## 5. Becoming trustworthy
 
-The dashboard falls back gracefully to a verified Gold snapshot if the Snowflake connection is unavailable.
+Raw data is honest but messy. It contains repeats from at-least-once delivery, and potentially malformed or conflicting records. **dbt** turns it into something people can rely on, in three layers:
 
-![Dashboard](image/dashboard1.png)
-
-![Dashboard – Additional View](image/dashboard2.png)
-
----
-
-## Repository Structure
-
-```
-Realtimepipeline/
-├── stimulator/               # Python event producer (live / historical / replay modes)
-│   ├── datagenerator.py
-│   └── .env.example
-├── consumer/                 # Kafka → MinIO consumer
-│   ├── kafka_to_minio.py
-│   └── .env.example
-├── docker/                   # Docker Compose (Kafka, ZooKeeper, Kafdrop, MinIO, Airflow)
-│   ├── docker-compose.yml
-│   ├── .env.example
-│   └── dags/
-│       ├── minio_to_kafka.py # Airflow DAG: MinIO → Snowflake Bronze
-│       └── .env.example
-├── spotify_dbt/              # dbt project
-│   ├── models/
-│   │   ├── staging/          # Raw Bronze normalisation views
-│   │   ├── silver/           # Deduplicated canonical events + quarantine
-│   │   └── gold/
-│   │       ├── dimensions/   # dim_songs, dim_users, dim_date
-│   │       ├── facts/        # fct_listening_events
-│   │       └── aggregates/   # agg_daily_activity, agg_song_rankings,
-│   │                         # agg_artist_rankings, agg_country_activity,
-│   │                         # agg_device_distribution
-│   └── tests/                # dbt data-quality tests
-├── dashboard/                # Next.js analytics dashboard
-│   ├── src/
-│   │   ├── app/              # Next.js App Router pages and API routes
-│   │   ├── components/       # React chart and UI components
-│   │   ├── lib/
-│   │   │   ├── data.ts       # Server-side data fetching with 60 s cache
-│   │   │   └── query_gold_api.py  # Python → Snowflake Gold query bridge
-│   │   └── data/             # Verified Gold snapshot (fallback)
-│   └── .env.example
-├── src/realtimepipeline/     # Shared utilities (baseline manifest helper)
-├── tests/                    # Python unit and integration tests
-├── image/                    # Architecture diagram and dashboard screenshots
-├── secrets/                  # RSA key pair — NEVER committed (gitignored)
-├── .github/workflows/ci.yml  # GitHub Actions CI
-└── pyproject.toml            # Python project and dependency manifest (uv)
-```
-
----
-
-## Configuration and Environment Variables
-
-Each component reads credentials from a local `.env` file. Copy the relevant `.env.example` to `.env` and fill in your values. **Never commit `.env` files or key material.**
-
-### Producer — `stimulator/.env`
-
-| Variable | Description |
-|---|---|
-| `KAFKA_BOOTSTRAP_SERVERS` | Kafka broker address (e.g. `localhost:29092`) |
-| `KAFKA_TOPIC` | Target topic name |
-| `PRODUCER_MODE` | `live` \| `historical` \| `replay` |
-| `USER_COUNT` | Number of synthetic users |
-| `EVENT_INTERVAL_SECONDS` | Delay between live events |
-
-### Consumer — `consumer/.env`
-
-| Variable | Description |
-|---|---|
-| `MINIO_ENDPOINT` | MinIO S3-compatible endpoint URL |
-| `MINIO_ACCESS_KEY` | MinIO access key |
-| `MINIO_SECRET_KEY` | MinIO secret key |
-| `MINIO_BUCKET` | Target bucket name |
-| `KAFKA_TOPIC` | Source topic name |
-| `KAFKA_BOOTSTRAP_SERVER` | Kafka broker address |
-| `KAFKA_GROUP_ID` | Consumer group ID |
-| `BATCH_SIZE` | Events per NDJSON file |
-
-### Docker services — `docker/.env`
-
-| Variable | Description |
-|---|---|
-| `MINIO_ROOT_USER` | MinIO root username |
-| `MINIO_ROOT_PASSWORD` | MinIO root password |
-| `POSTGRES_USER` | Airflow metadata DB user |
-| `POSTGRES_PASSWORD` | Airflow metadata DB password |
-| `AIRFLOW_ADMIN_USER` | Airflow web UI admin username |
-| `AIRFLOW_ADMIN_PASSWORD` | Airflow web UI admin password |
-
-### Airflow DAG — `docker/dags/.env`
-
-| Variable | Description |
-|---|---|
-| `SNOWFLAKE_USER` | Snowflake login user |
-| `SNOWFLAKE_ACCOUNT` | Snowflake account identifier |
-| `SNOWFLAKE_PRIVATE_KEY_PATH` | Path to RSA `.p8` key file |
-| `SNOWFLAKE_WAREHOUSE` | Virtual warehouse name |
-| `SNOWFLAKE_DATABASE` | Target database |
-| `SNOWFLAKE_SCHEMA` | Target schema |
-| `MINIO_ENDPOINT` | MinIO endpoint (container-internal) |
-| `MINIO_ACCESS_KEY` | MinIO access key |
-| `MINIO_SECRET_KEY` | MinIO secret key |
-
-### Dashboard — `dashboard/.env`
-
-| Variable | Description |
-|---|---|
-| `SNOWFLAKE_ACCOUNT` | Snowflake account identifier |
-| `SNOWFLAKE_USER` | Snowflake login user |
-| `SNOWFLAKE_PRIVATE_KEY_PATH` | Path to RSA `.p8` key file |
-| `SNOWFLAKE_WAREHOUSE` | Virtual warehouse name |
-| `SNOWFLAKE_DATABASE` | Target database |
-| `SNOWFLAKE_SCHEMA` | Schema to query (`GOLD`) |
-| `SNOWFLAKE_ROLE` | Snowflake role (optional) |
-
-> Snowflake authentication uses RSA key-pair authentication. Place your `.p8` private key in `secrets/rsa_key.p8`. The `secrets/` directory is gitignored and must never be committed.
-
----
-
-## Continuous Integration
-
-GitHub Actions CI (`.github/workflows/ci.yml`) runs on every push and pull request:
-
-| Job | What runs | Credentials required |
+| Layer | What happens | Why it matters |
 |---|---|---|
-| Producer unit tests | Offline Kafka/MinIO mocks | None |
-| DAG configuration tests | DAG structure + error sanitisation | None |
-| dbt parse | YAML + SQL syntax validation | None (dummy env vars) |
-| Dashboard build | ESLint + Next.js production build | None (dummy env vars) |
+| **Staging** | Every row is cleaned and checked against seven rules: valid ID, parseable timestamp, known action, known device, known country, required fields present, and no conflicting copies of the same event. | Problems are flagged, not hidden. Nothing is thrown away yet. |
+| **Silver** | Only rows that pass every rule survive, collapsed to exactly one row per `event_id`. Failing rows go to a **quarantine** view with every reason attached. | Duplicates disappear here, and each excluded row can still be explained. |
+| **Gold** | A star schema: one fact table of listening events, dimensions for songs, users and dates, and ready-made aggregates for rankings, devices and countries. | Analysts get fast, simple tables with no risk of double counting. |
 
-Integration tests (Snowflake + live MinIO) are run locally only.
+Two modelling decisions shape Gold:
+
+- **Device and country live on the fact, not on the user.** One listener can switch from phone to laptop, or appear in several countries, within an hour, so these describe the moment rather than the person.
+- **The calendar grows with the data.** The date dimension spans from the first to the last event instead of a fixed month, so a historical backfill never falls off the calendar.
+
+Over a hundred dbt tests guard these promises: uniqueness, non-null keys, valid relationships, and reconciliation checks proving that staging, Silver and Gold agree on row counts.
+
+## 6. Telling the story
+
+The last stop is a **Next.js** dashboard that turns Gold tables into answers. Each card asks a plain question and answers it in one line, and each one uses a chart suited to the question:
+
+- **When do people listen?** Hour-by-hour column chart.
+- **What do listeners do?** A single 100% bar splitting plays, pauses, saves and skips.
+- **Which songs and artists lead?** Ranked bars, with the leader highlighted.
+- **Which devices?** A waffle grid where every square is 1% of activity.
+- **Where are they listening?** A lollipop chart; clicking a country filters the whole page.
+
+Every chart can switch to a plain table. The colour palette is checked for colour-blind safety in both light and dark themes. If the warehouse is unreachable, the page says so clearly and falls back to a saved Gold snapshot instead of showing a blank screen.
+
+![Dashboard, light theme](image/dashboard-light.png)
+
+![Dashboard, dark theme](image/dashboard-dark.png)
+
+Behind the page, one API route runs a single consolidated SQL query against Gold and caches the result for 60 seconds. Filter values are checked against an allow-list before they reach the warehouse.
+
+## 7. Shipping changes safely
+
+Every change to the pipeline goes through the same gate. On each push and pull request, **CI** runs three jobs in parallel. The first runs the producer, consumer and DAG tests offline. The second parses the whole dbt project, checking every model, reference and data test. The third lints, type-checks and builds the dashboard. None of them needs a warehouse or a secret.
+
+When a change reaches `main` and CI is green, **CD** deploys the warehouse. A protected `production` environment runs `dbt build` against Snowflake, which rebuilds Silver and Gold and runs the data tests in dependency order, so a failing test stops everything downstream of it. The deploy checks out exactly the commit CI tested, never runs two at once, and leaves a results summary and the dbt artifacts on the run.
 
 ---
 
-## Security Note
+## Why it is built this way
 
-- All `.env` files, RSA private keys (`.p8`), and the `secrets/` directory are excluded from version control via `.gitignore`.
-- **Configure your own credentials** before running. Do not reuse example values in production.
-- If you fork this repository, generate a new RSA key pair for Snowflake authentication. The `secrets/` directory should never appear in `git status` output.
-- See each component's `.env.example` for the full list of required variables.
+| Decision | Problem it solves |
+|---|---|
+| Kafka between the app and storage | The app never waits on storage; bursts are absorbed by the stream. |
+| Commit offsets only after upload | A crash replays data instead of losing it. |
+| Append-only Bronze that keeps duplicates | The raw record stays complete and auditable; cleaning happens later, in the open. |
+| File manifest with ETag + size | Hourly loads are safe to rerun and recover from partial failures. |
+| Quarantine instead of delete | Every excluded row can be explained and fixed at the source. |
+| No joins in the fact table | The fact can never fan out and inflate counts. |
+| Snapshot fallback in the dashboard | The story stays readable even when the warehouse is down. |
 
+This is a **micro-batch** pipeline: events stream continuously, but the warehouse refreshes on the hourly Airflow schedule plus dbt run time. Kafka and MinIO make each event durable within seconds; the dashboard reflects the latest warehouse load.
+
+## Built with
+
+| Stage | Technology |
+|---|---|
+| Event generation | Python 3.13 |
+| Streaming | Apache Kafka (Confluent 7.4), ZooKeeper, Kafdrop |
+| Lake storage | MinIO (S3-compatible) |
+| Orchestration | Apache Airflow 2.9 in Docker Compose |
+| Warehouse | Snowflake, with RSA key-pair authentication |
+| Transformation and testing | dbt-core with dbt-snowflake |
+| Dashboard | Next.js 16, React 19, TypeScript, Tailwind CSS |
+| CI/CD | GitHub Actions: offline pytest, dbt parse, dashboard lint/typecheck/build; `dbt build` on Snowflake after CI passes on `main` |
+
+## Where things live
+
+```
+stimulator/      the "music app": synthetic event producer
+consumer/        Kafka -> MinIO Bronze landing
+docker/          Kafka, MinIO and Airflow services, plus the hourly DAG
+spotify_dbt/     staging, Silver, quarantine and Gold models with data tests
+dashboard/       Next.js dashboard and its Gold query
+tests/           producer, consumer and manifest tests
+image/           architecture diagram and dashboard screenshots
+```
+
+Credentials, private keys and `.env` files never enter version control; each component ships only an `.env.example` listing what it needs.

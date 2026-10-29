@@ -5,14 +5,6 @@
     )
 }}
 
-/*
-    Monitoring View: silver_quarantine_summary
-    - Flattens the array of quality issues on quarantined rows to compute
-      summary frequencies by specific failure reason code.
-    - Yields zero rows when all records are valid; expands to actionable counts
-      when defects occur.
-*/
-
 SELECT
     reason.value::string            AS failure_reason,
     COUNT(*)                        AS affected_record_count,

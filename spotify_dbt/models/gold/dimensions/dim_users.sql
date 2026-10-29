@@ -5,17 +5,7 @@
     )
 }}
 
-/*
-    Dimension: dim_users
-    Grain: Exactly one row per valid user_id.
-    Source: ref('silver_spotify_events')
-    
-    Attribute Rule:
-    Phase 1 empirical analysis proved that users dynamically change devices (desktop, mobile, web)
-    and countries (up to 6 different countries per user within 1 hour).
-    Therefore, country and device are transient event-level context attributes placed strictly
-    in fct_listening_events, NOT permanent user dimension attributes.
-*/
+-- Grain: one row per user_id. Device and country change between events, so they live on the fact, not here.
 
 with silver_events as (
     select

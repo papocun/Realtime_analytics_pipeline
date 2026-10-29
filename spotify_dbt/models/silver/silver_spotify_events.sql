@@ -5,16 +5,7 @@
     )
 }}
 
-/*
-    Silver Spotify Events:
-    - Cleaned, validated, and deduplicated event stream.
-    - Exactly one canonical record per verified, conflict-free EVENT_ID.
-    - Ingestion contract:
-        * Invalid records (bad IDs, unparseable timestamps, invalid types, attribute nulls) are excluded.
-        * Conflicting records (same event_id, different payloads) are quarantined.
-        * Only records where is_valid_record = TRUE (issue_count == 0) qualify.
-    - Deduplication: PARTITION BY event_id ORDER BY event_timestamp DESC, user_id ASC, song_id ASC.
-*/
+-- Grain: one row per valid, conflict-free event_id. Duplicates from at-least-once delivery collapse here.
 
 WITH clean_staged_events AS (
     SELECT

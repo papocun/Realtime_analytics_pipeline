@@ -1,9 +1,3 @@
-/*
-    Singular Test: assert_gold_aggregates_match_fact
-    Objective: Validates aggregate consistency between fct_listening_events and the pre-aggregated Gold summary tables.
-    Pass condition: All aggregate totals match the underlying fact table totals exactly (returns 0 rows).
-*/
-
 with fact_totals as (
     select
         count(*) as fact_total_events,

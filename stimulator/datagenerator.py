@@ -1,31 +1,4 @@
-"""
-Spotify Synthetic Event Producer
-=================================
-Produces synthetic Spotify-like listening events to a Kafka topic in three
-explicit operating modes:
-
-  A. HISTORICAL  – Generate a configurable number of events distributed over
-                   a past time window. Designed for warehouse backfill.
-  B. LIVE        – Continuously emit new events at a configured interval until
-                   interrupted. Designed for streaming pipeline testing.
-  C. REPLAY      – Re-publish a bounded fixture of events for idempotency and
-                   consumer testing. Does NOT auto-replay the full dataset.
-
-Usage:
-  Set PRODUCER_MODE=historical|live|replay in stimulator/.env or environment,
-  then run:  uv run python stimulator/datagenerator.py
-
-Event schema (matches consumer, dbt staging, and Silver contract):
-  event_id       – UUIDv4, unique per logical event
-  user_id        – UUIDv5(seed + index), stable across restarts
-  song_id        – UUIDv5(artist::song), stable across restarts
-  artist_name    – string
-  song_name      – string
-  event_type     – play | pause | skip | add_to_playlist
-  device_type    – mobile | desktop | web
-  country        – US | UK | CA | AU | IN | DE
-  timestamp      – UTC ISO-8601 string (e.g. 2026-10-20T14:05:37Z)
-"""
+"""Synthetic music listening events producer for Kafka (historical, live and replay modes)."""
 
 import json
 import logging
@@ -42,9 +15,6 @@ from dotenv import load_dotenv
 from kafka import KafkaProducer
 from kafka.errors import KafkaError
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -52,9 +22,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("producer")
 
-# ---------------------------------------------------------------------------
-# Load environment
-# ---------------------------------------------------------------------------
 _env_candidates = [
     os.path.join(os.path.dirname(__file__), ".env"),
     ".env",
@@ -64,10 +31,6 @@ for _cand in _env_candidates:
         load_dotenv(_cand)
         break
 
-
-# ---------------------------------------------------------------------------
-# Configuration (all from env, validated at startup)
-# ---------------------------------------------------------------------------
 
 def _env_int(name: str, default: int) -> int:
     val = os.getenv(name)
@@ -90,8 +53,6 @@ def _env_float(name: str, default: float) -> float:
 
 
 class ProducerConfig:
-    """Validated producer configuration from environment variables."""
-
     def __init__(self):
         self.kafka_bootstrap_servers: str = os.getenv(
             "KAFKA_BOOTSTRAP_SERVERS", "localhost:29092"
@@ -99,12 +60,10 @@ class ProducerConfig:
         self.kafka_topic: str = os.getenv("KAFKA_TOPIC", "spotify-events")
         self.producer_mode: str = os.getenv("PRODUCER_MODE", "live").lower().strip()
 
-        # Catalog sizes
         self.user_count: int = _env_int("USER_COUNT", 20)
         self.song_count: int = _env_int("SONG_COUNT", 6)
         self.artist_count: int = _env_int("ARTIST_COUNT", 6)
 
-        # Historical backfill
         self.backfill_events: int = _env_int("BACKFILL_EVENTS", 1000)
         self.historical_days: int = _env_int("HISTORICAL_DAYS", 30)
         self.batch_size: int = _env_int("BATCH_SIZE", 50)
@@ -112,10 +71,8 @@ class ProducerConfig:
             int(os.getenv("RANDOM_SEED")) if os.getenv("RANDOM_SEED") else None
         )
 
-        # Live mode
         self.event_interval_seconds: float = _env_float("EVENT_INTERVAL_SECONDS", 1.0)
 
-        # Replay mode
         self.replay_count: int = _env_int("REPLAY_COUNT", 20)
 
         self._validate()
@@ -174,13 +131,6 @@ class ProducerConfig:
         return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# Stable Catalog  (deterministic IDs across restarts)
-# ---------------------------------------------------------------------------
-
-# Hard-coded song/artist pairs that form the baseline catalog.
-# Additional songs are procedurally generated using UUIDv5 seeds so their
-# IDs are identical between runs (stable across producer restarts).
 _BASELINE_PAIRS: List[Dict] = [
     {"artist": "The Weeknd",   "song": "Blinding Lights"},
     {"artist": "Dua Lipa",     "song": "Levitating"},
@@ -194,28 +144,24 @@ EVENT_TYPES  = ["play", "pause", "skip", "add_to_playlist"]
 DEVICE_TYPES = ["mobile", "desktop", "web"]
 COUNTRIES    = ["US", "UK", "CA", "AU", "IN", "DE"]
 
-# Weighted distributions reflecting realistic listening patterns
-_EVENT_TYPE_WEIGHTS  = [0.40, 0.25, 0.22, 0.13]   # play, pause, skip, add_to_playlist
-_DEVICE_TYPE_WEIGHTS = [0.37, 0.34, 0.29]           # desktop, mobile, web
-_COUNTRY_WEIGHTS     = [0.30, 0.18, 0.17, 0.16, 0.12, 0.07]  # US, UK, CA, AU, IN, DE
+_EVENT_TYPE_WEIGHTS  = [0.40, 0.25, 0.22, 0.13]
+_DEVICE_TYPE_WEIGHTS = [0.37, 0.34, 0.29]
+_COUNTRY_WEIGHTS     = [0.30, 0.18, 0.17, 0.16, 0.12, 0.07]
 
-# UUIDv5 namespace for deterministic ID generation
+# Fixed namespace so song_id and user_id are UUIDv5 values that stay identical across restarts,
+# which keeps Gold dimensions stable no matter how often the producer is relaunched.
 _CATALOG_NAMESPACE = uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
 
 
 def _song_id(artist: str, song: str) -> str:
-    """Deterministic song_id: identical across restarts."""
     return str(uuid.uuid5(_CATALOG_NAMESPACE, f"{artist}::{song}"))
 
 
 def _user_id(seed_name: str, index: int) -> str:
-    """Deterministic user_id: identical across restarts for the same seed_name+index."""
     return str(uuid.uuid5(_CATALOG_NAMESPACE, f"user::{seed_name}::{index}"))
 
 
 def build_catalog(cfg: ProducerConfig) -> Dict:
-    """Build stable song/artist/user catalog from configuration."""
-    # Songs: start with baseline, extend with generated pairs
     pairs = _BASELINE_PAIRS[: min(cfg.song_count, len(_BASELINE_PAIRS))]
     if cfg.song_count > len(_BASELINE_PAIRS):
         for i in range(cfg.song_count - len(_BASELINE_PAIRS)):
@@ -226,31 +172,17 @@ def build_catalog(cfg: ProducerConfig) -> Dict:
     for p in pairs:
         p["song_id"] = _song_id(p["artist"], p["song"])
 
-    # Users: stable IDs
     seed_name = str(cfg.random_seed) if cfg.random_seed is not None else "default"
     users = [_user_id(seed_name, i) for i in range(cfg.user_count)]
 
     return {"songs": pairs, "users": users}
 
 
-# ---------------------------------------------------------------------------
-# Event generation
-# ---------------------------------------------------------------------------
-
 def _utc_ts(dt: datetime) -> str:
-    """Format a datetime as an ISO-8601 UTC string ending in Z."""
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def generate_event(catalog: Dict, rng: random.Random, ts: Optional[datetime] = None) -> Dict:
-    """
-    Generate a single synthetic Spotify event.
-
-    - event_id  : new UUIDv4 per call (unique per logical event).
-    - user_id   : sampled from stable catalog.
-    - song_id   : stable via UUIDv5.
-    - timestamp : ts if provided, otherwise current UTC second.
-    """
     pair = rng.choices(catalog["songs"], k=1)[0]
     user = rng.choice(catalog["users"])
     event_type  = rng.choices(EVENT_TYPES,  weights=_EVENT_TYPE_WEIGHTS,  k=1)[0]
@@ -274,12 +206,6 @@ def generate_event(catalog: Dict, rng: random.Random, ts: Optional[datetime] = N
 
 
 def historical_events_iter(catalog: Dict, cfg: ProducerConfig) -> Iterator[Dict]:
-    """
-    Yield synthetic historical events one at a time.
-
-    Timestamps are distributed randomly over [now - historical_days, now].
-    Does NOT hold all events in memory simultaneously.
-    """
     rng = random.Random(cfg.random_seed)
     end_ts   = datetime.now(timezone.utc)
     start_ts = end_ts - timedelta(days=cfg.historical_days)
@@ -292,13 +218,7 @@ def historical_events_iter(catalog: Dict, cfg: ProducerConfig) -> Iterator[Dict]
 
 
 def replay_fixture(catalog: Dict, cfg: ProducerConfig) -> List[Dict]:
-    """
-    Build a small, bounded replay fixture.
-
-    The fixture uses a fixed seed so the same event IDs are generated
-    each time for controlled idempotency/consumer testing.
-    """
-    rng = random.Random(42)  # fixed seed for reproducible replay
+    rng = random.Random(42)
     end_ts   = datetime.now(timezone.utc)
     start_ts = end_ts - timedelta(hours=2)
     span_secs = int((end_ts - start_ts).total_seconds())
@@ -308,15 +228,12 @@ def replay_fixture(catalog: Dict, cfg: ProducerConfig) -> List[Dict]:
         offset = rng.randint(0, span_secs)
         ts = start_ts + timedelta(seconds=offset)
         evt = generate_event(catalog, rng, ts=ts)
+        # Deterministic IDs: replaying twice must not create new canonical rows in Silver.
         evt["event_id"] = str(uuid.uuid5(_CATALOG_NAMESPACE, f"replay::{i}"))
         fixture.append(evt)
 
     return fixture
 
-
-# ---------------------------------------------------------------------------
-# Kafka delivery helpers
-# ---------------------------------------------------------------------------
 
 _delivery_errors: List[str] = []
 
@@ -330,22 +247,19 @@ def build_producer(cfg: ProducerConfig) -> KafkaProducer:
     return KafkaProducer(
         bootstrap_servers=[cfg.kafka_bootstrap_servers],
         value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-        acks="all",               # wait for leader + ISR acknowledgement
+        # acks=all + retries gives at-least-once delivery; Silver dedupes on event_id downstream.
+        acks="all",
         retries=3,
         retry_backoff_ms=300,
-        linger_ms=10,             # small batching window
+        linger_ms=10,
         max_block_ms=10_000,
     )
 
 
 def send_event(producer: KafkaProducer, topic: str, event: Dict):
-    """Send a single event; attach error callback."""
     producer.send(topic, event).add_errback(_on_send_error)
 
 
-# ---------------------------------------------------------------------------
-# Graceful shutdown
-# ---------------------------------------------------------------------------
 _shutdown_requested = False
 
 
@@ -358,10 +272,6 @@ def _handle_sigint(signum, frame):
 signal.signal(signal.SIGINT, _handle_sigint)
 signal.signal(signal.SIGTERM, _handle_sigint)
 
-
-# ---------------------------------------------------------------------------
-# Mode A: Historical backfill
-# ---------------------------------------------------------------------------
 
 def run_historical(cfg: ProducerConfig, catalog: Dict):
     log.info("▶  Mode: HISTORICAL BACKFILL")
@@ -397,7 +307,6 @@ def run_historical(cfg: ProducerConfig, catalog: Dict):
                 )
                 batch = []
 
-        # Flush remainder
         if batch and not _shutdown_requested:
             for evt in batch:
                 send_event(producer, cfg.kafka_topic, evt)
@@ -417,14 +326,10 @@ def run_historical(cfg: ProducerConfig, catalog: Dict):
     log.info("=" * 60)
 
 
-# ---------------------------------------------------------------------------
-# Mode B: Continuous live mode
-# ---------------------------------------------------------------------------
-
 def run_live(cfg: ProducerConfig, catalog: Dict):
     log.info("▶  Mode: LIVE (continuous, Ctrl+C to stop)")
     log.info(f"   Event interval: {cfg.event_interval_seconds}s")
-    rng = random.Random()  # non-seeded: different each run
+    rng = random.Random()
 
     producer = build_producer(cfg)
     published = 0
@@ -441,7 +346,6 @@ def run_live(cfg: ProducerConfig, catalog: Dict):
                 f"{event['country']} | {event['device_type']}"
             )
 
-            # Flush every batch_size messages to avoid unbounded memory growth
             if published % cfg.batch_size == 0:
                 producer.flush()
 
@@ -455,10 +359,6 @@ def run_live(cfg: ProducerConfig, catalog: Dict):
     new_errors = len(_delivery_errors) - errors_before
     log.info(f"Live mode stopped. Published: {published:,}, Errors: {new_errors}")
 
-
-# ---------------------------------------------------------------------------
-# Mode C: Replay / test mode
-# ---------------------------------------------------------------------------
 
 def run_replay(cfg: ProducerConfig, catalog: Dict):
     log.info("▶  Mode: REPLAY/TEST")
@@ -497,10 +397,6 @@ def run_replay(cfg: ProducerConfig, catalog: Dict):
         "must not produce duplicate canonical rows)."
     )
 
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 
 def main():
     try:

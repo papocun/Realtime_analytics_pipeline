@@ -5,14 +5,7 @@
     )
 }}
 
-/*
-    Quarantine Spotify Events:
-    - Exposes invalid, malformed, or conflicting records excluded from Silver.
-    - Preserves all failure reason codes as both an ARRAY (quality_issues)
-      and a comma-separated string (failure_reasons).
-    - Preserves unparseable raw timestamps, missing IDs, and conflicting attributes
-      to facilitate engineering triage and root-cause analysis.
-*/
+-- Every row excluded from Silver, with all failure reasons kept for triage.
 
 SELECT
     event_id,

@@ -1,11 +1,3 @@
-/*
-    Test: assert_silver_staging_reconciliation
-    Validates cross-layer consistency:
-    The row count in silver_spotify_events must exactly equal the count of distinct
-    valid event_ids in stg_spotify_events (where is_valid_record = TRUE).
-    Fails if there is any mismatch between staging and Silver.
-*/
-
 WITH staging_valid_events AS (
     SELECT
         COUNT(DISTINCT event_id) AS expected_silver_rows

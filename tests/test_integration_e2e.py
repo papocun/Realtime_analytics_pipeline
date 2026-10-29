@@ -16,12 +16,15 @@ env_file = project_root / "docker" / "dags" / ".env"
 if env_file.is_file():
     load_dotenv(str(env_file), override=True)
 
-from minio_to_kafka import (
+from minio_to_snowflake import (
     extract_from_minio,
     get_snowflake_connection,
     get_successful_manifest_files,
     load_raw_to_snowflake,
 )
+
+
+pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(scope="module")
@@ -42,14 +45,6 @@ def sf_conn():
 
 
 def test_e2e_new_file_and_subsequent_skip(s3_client, sf_conn):
-    """
-    Test E2E:
-    1. Upload a new valid JSON file to MinIO.
-    2. Extract and load into Snowflake.
-    3. Verify file is marked SUCCESS and Bronze records exist.
-    4. Run extract again: verify file is SKIPPED as unchanged.
-    5. Clean up.
-    """
     bucket = os.getenv("MINIO_BUCKET")
     db = os.getenv("SNOWFLAKE_DATABASE")
     schema = os.getenv("SNOWFLAKE_SCHEMA")
@@ -82,11 +77,9 @@ def test_e2e_new_file_and_subsequent_skip(s3_client, sf_conn):
     }
     body = f"{json.dumps(event_1)}\n{json.dumps(event_2)}\n"
 
-    # 1. Put object in MinIO
     s3_client.put_object(Bucket=bucket, Key=test_key, Body=body.encode("utf-8"))
 
     try:
-        # 2. Extract & Load
         payload_path = extract_from_minio()
         with open(payload_path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -96,7 +89,6 @@ def test_e2e_new_file_and_subsequent_skip(s3_client, sf_conn):
 
         load_raw_to_snowflake()
 
-        # 3. Verify in manifest
         with sf_conn.cursor() as cur:
             cur.execute(
                 f'SELECT STATUS, RECORD_COUNT FROM "{db}"."{schema}"."{manifest}" WHERE SOURCE_FILE = %s',
@@ -107,7 +99,6 @@ def test_e2e_new_file_and_subsequent_skip(s3_client, sf_conn):
             assert row[0] == "SUCCESS", f"Expected SUCCESS status, got {row[0]}"
             assert row[1] == 2, f"Expected 2 records, got {row[1]}"
 
-            # Verify rows in Bronze
             cur.execute(
                 f'SELECT COUNT(*) FROM "{db}"."{schema}"."{table}" WHERE EVENT_ID IN (%s, %s)',
                 (event_1["event_id"], event_2["event_id"]),
@@ -115,7 +106,6 @@ def test_e2e_new_file_and_subsequent_skip(s3_client, sf_conn):
             count = cur.fetchone()[0]
             assert count == 2, f"Expected 2 Bronze rows, found {count}"
 
-        # 4. Run extract again -> must be skipped!
         payload_path_2 = extract_from_minio()
         with open(payload_path_2, "r", encoding="utf-8") as f:
             data_2 = json.load(f)
@@ -124,7 +114,6 @@ def test_e2e_new_file_and_subsequent_skip(s3_client, sf_conn):
         assert test_key not in queued_keys_2, "Already processed file must NOT be queued again"
 
     finally:
-        # Clean up
         s3_client.delete_object(Bucket=bucket, Key=test_key)
         with sf_conn.cursor() as cur:
             cur.execute(
@@ -139,14 +128,6 @@ def test_e2e_new_file_and_subsequent_skip(s3_client, sf_conn):
 
 
 def test_e2e_corrupted_json_marked_failed(s3_client, sf_conn):
-    """
-    Test E2E:
-    1. Upload an invalid JSON file to MinIO.
-    2. Run extract & load.
-    3. Verify file is marked FAILED with safe error message.
-    4. Verify 0 records inserted into Bronze.
-    5. Clean up.
-    """
     bucket = os.getenv("MINIO_BUCKET")
     db = os.getenv("SNOWFLAKE_DATABASE")
     schema = os.getenv("SNOWFLAKE_SCHEMA")

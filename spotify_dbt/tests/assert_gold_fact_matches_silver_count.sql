@@ -1,9 +1,3 @@
-/*
-    Singular Test: assert_gold_fact_matches_silver_count
-    Objective: Validates that the Gold fact table maintains exact 1:1 grain with the clean Silver layer.
-    Pass condition: Difference in row counts is zero (returns 0 rows).
-*/
-
 with silver_count as (
     select count(*) as cnt from {{ ref('silver_spotify_events') }}
 ),

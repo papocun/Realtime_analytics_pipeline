@@ -25,6 +25,10 @@ secrets/
 # Logs (may contain local paths and runtime details)
 logs/
 
+# Airflow runtime mounts and local diagram build output
+docker/plugins/
+.archify/
+
 # dbt artifacts
 target/
 dbt_packages/

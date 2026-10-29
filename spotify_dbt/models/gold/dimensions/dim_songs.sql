@@ -5,17 +5,7 @@
     )
 }}
 
-/*
-    Dimension: dim_songs
-    Grain: Exactly one row per valid song_id.
-    Source: ref('silver_spotify_events')
-    
-    Attribute Resolution Rule:
-    Phase 1 empirical analysis confirmed a strict 1:1 relationship between song_id,
-    song_name, and artist_name across all verified records (0 conflicts).
-    To safeguard against future conflicting upstream data, we select the canonical
-    song_name and artist_name via the latest observed timestamp per song_id.
-*/
+-- Grain: one row per song_id; name and artist come from the latest observation if they ever drift.
 
 with silver_events as (
     select

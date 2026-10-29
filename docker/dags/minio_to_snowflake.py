@@ -1,3 +1,5 @@
+"""Hourly Airflow DAG that loads new MinIO Bronze files into Snowflake, tracked file by file in a manifest table."""
+
 import json
 import logging
 import os
@@ -17,11 +19,7 @@ except ImportError:
     DAG = None
     PythonOperator = None
 
-# ------------------------------------------------------
-# LOAD ENVIRONMENT VARIABLES
-# ------------------------------------------------------
 
-# Support container path with fallback to workspace paths for testing/development
 _env_candidates = [
     Path("/opt/airflow/dags/.env"),
     Path(__file__).resolve().parent / ".env",
@@ -35,11 +33,9 @@ for _candidate in _env_candidates:
 
 logger = logging.getLogger("airflow.task")
 
-# ------------------------------------------------------
-# CONFIGURATION
-# ------------------------------------------------------
 
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio:9000")
+MINIO_HOST_ENDPOINT = os.getenv("MINIO_HOST_ENDPOINT", "http://localhost:9002")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
 MINIO_BUCKET = os.getenv("MINIO_BUCKET")
@@ -100,7 +96,6 @@ def _resolve_private_key_path() -> Path:
     if key_path.is_file():
         return key_path
 
-    # Fallback to local workspace secrets when running outside container
     fallback_candidates = [
         Path("secrets/rsa_key.p8"),
         Path(__file__).resolve().parents[2] / "secrets" / "rsa_key.p8",
@@ -131,9 +126,9 @@ def get_snowflake_connection():
 
 def _get_s3_client():
     endpoint = MINIO_ENDPOINT
-    # Fallback to localhost if container host is unreachable during host test execution
+    # The compose service name only resolves inside Docker; tests run on the host use the published port.
     if "minio:" in endpoint and not Path("/.dockerenv").exists():
-        endpoint = "http://localhost:9002"
+        endpoint = MINIO_HOST_ENDPOINT
 
     return boto3.client(
         "s3",
@@ -144,7 +139,6 @@ def _get_s3_client():
 
 
 def ensure_snowflake_tables(conn):
-    """Ensure Bronze table and Manifest table exist idempotently."""
     bronze_target = (
         f'"{SNOWFLAKE_DATABASE}"."{SNOWFLAKE_SCHEMA}"."{SNOWFLAKE_TABLE}"'
     )
@@ -188,10 +182,6 @@ def ensure_snowflake_tables(conn):
 
 
 def get_successful_manifest_files(conn) -> Dict[str, Set[Tuple[str, int]]]:
-    """
-    Returns a mapping of SOURCE_FILE -> set of (SOURCE_ETAG, SOURCE_SIZE)
-    that have been successfully processed.
-    """
     manifest_target = (
         f'"{SNOWFLAKE_DATABASE}"."{SNOWFLAKE_SCHEMA}"."{SNOWFLAKE_MANIFEST_TABLE}"'
     )
@@ -211,18 +201,12 @@ def get_successful_manifest_files(conn) -> Dict[str, Set[Tuple[str, int]]]:
 
 
 def sanitize_error(err_str: str) -> str:
-    """Safely truncate and mask sensitive details in error messages."""
     clean = str(err_str)[:3900]
     if MINIO_SECRET_KEY:
         clean = clean.replace(MINIO_SECRET_KEY, "***")
     if MINIO_ACCESS_KEY:
         clean = clean.replace(MINIO_ACCESS_KEY, "***")
     return clean
-
-
-# ------------------------------------------------------
-# EXTRACT FROM MINIO (FILE-AWARE)
-# ------------------------------------------------------
 
 
 def extract_from_minio(**context) -> str:
@@ -260,13 +244,13 @@ def extract_from_minio(**context) -> str:
                 else None
             )
 
-            # Check if this exact file identity was already successfully processed
+            # A file is skipped only if this exact version (ETag + size) already loaded successfully.
+            # Rewritten files and earlier FAILED/PROCESSING attempts are picked up again.
             known_versions = successful_manifest.get(key, set())
             if (etag, size) in known_versions:
                 skipped_count += 1
                 continue
 
-            # Candidate file: either new, modified, or previous attempt failed/interrupted
             file_entry: Dict[str, Any] = {
                 "source_file": key,
                 "source_etag": etag,
@@ -325,11 +309,6 @@ def extract_from_minio(**context) -> str:
     return str(temp_path)
 
 
-# ------------------------------------------------------
-# LOAD INTO SNOWFLAKE BRONZE (TRANSACTIONAL & AUDITED)
-# ------------------------------------------------------
-
-
 def load_raw_to_snowflake(**context):
     file_path = None
     if context and "ti" in context:
@@ -379,7 +358,7 @@ def load_raw_to_snowflake(**context):
             parse_error = item.get("parse_error")
             manifest_id = str(uuid.uuid4())
 
-            # Step 1: Record PROCESSING state in manifest
+            # PROCESSING is committed first so an interrupted run leaves an audit trail and is retried next hour.
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
@@ -401,7 +380,6 @@ def load_raw_to_snowflake(**context):
                 )
             conn.commit()
 
-            # Step 2: Handle parse/read validation failures
             if parse_error:
                 safe_err = sanitize_error(parse_error)
                 with conn.cursor() as cur:
@@ -421,8 +399,6 @@ def load_raw_to_snowflake(**context):
                 print(f"File {source_file} marked FAILED: {safe_err}")
                 continue
 
-            # Step 3: Insert raw records and mark SUCCESS in atomic transaction
-            # Do NOT deduplicate records by EVENT_ID; preserve all valid source events.
             rows = [
                 tuple(
                     event.get(col.lower())
@@ -434,6 +410,8 @@ def load_raw_to_snowflake(**context):
             ]
 
             try:
+                # Rows and the SUCCESS flag commit together: a file is either fully loaded or not loaded at all.
+                # Bronze stays append-only; duplicate event_ids are kept here and resolved in Silver.
                 with conn.cursor() as cur:
                     cur.execute("BEGIN TRANSACTION")
 
@@ -498,10 +476,6 @@ def load_raw_to_snowflake(**context):
         conn.close()
 
 
-# ------------------------------------------------------
-# DAG DEFINITION
-# ------------------------------------------------------
-
 default_args = {
     "owner": "airflow",
     "start_date": datetime(2025, 10, 21),
@@ -517,6 +491,7 @@ if DAG is not None:
         description="Load raw Spotify events from MinIO to Snowflake Bronze with file-level manifest tracking",
         schedule="@hourly",
         catchup=False,
+        # One run at a time: extract and load hand off through a single LOCAL_TEMP_PATH file.
         max_active_runs=1,
     ) as dag:
 

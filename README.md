@@ -1,5 +1,7 @@
 # Music Analytics Pipeline
 
+Live Link - https://realtime-analytics-pipeline.vercel.app/ (Warehouse Offline)
+
 Every time someone presses play, pauses a track, skips a song or saves it to a playlist, a tiny signal is created. On its own it means nothing. Millions of them together answer real questions: *when do people listen, what do they love, what do they skip, and where are they?*
 
 This project follows one of those signals from the moment it is created to the moment it becomes a number on a dashboard. Along the way it passes through a message stream, an object-storage lake, an orchestrator, a cloud warehouse and a layer of data-quality checks. Each stop exists because of a specific problem that would otherwise lose, duplicate or corrupt the data.
